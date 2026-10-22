@@ -6,6 +6,7 @@ export interface GiftEvent {
   name?: string;
   coins?: number;
   userId?: string;
+  viewerName?: string;
   groupId?: string;
   msgId?: string;
   giftType?: number;
@@ -19,6 +20,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 function stringId(value: unknown): string | undefined {
   if (typeof value === 'string' && /^\d+$/.test(value) && value !== '0') return value;
   if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+  // Protobuf Long objects retain the full decimal ID in toString().
+  if (value && typeof value === 'object' &&
+      typeof (value as { toString?: unknown }).toString === 'function') {
+    const result = String(value);
+    if (/^\d+$/.test(result) && result !== '0') return result;
+  }
   return undefined;
 }
 function positiveInteger(value: unknown): number | undefined {
@@ -44,6 +51,8 @@ export function parseGiftEvent(value: unknown): GiftEvent | null {
     name: [details?.giftName, extended?.name, gift?.name].find(v => typeof v === 'string') as string | undefined,
     coins: cost,
     userId: stringId(user?.userId) ?? stringId(user?.id),
+    viewerName: [user?.uniqueId, event.uniqueId, user?.nickname, event.nickname]
+      .find(v => typeof v === 'string' && v.trim().length > 0) as string | undefined,
     groupId: stringId(event.groupId),
     msgId: stringId(common?.msgId) ?? stringId(event.msgId),
     giftType: typeof details?.giftType === 'number' ? details.giftType

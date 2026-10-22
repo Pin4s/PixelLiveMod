@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { formatTikTokError } from './errors.js';
 import { GiftResolver, parseCatalog, parseGiftEvent } from './gifts.js';
 import { SequenceCounter } from './sequence.js';
+import { randomUUID } from 'node:crypto';
 
 const log = (message: string): void => console.log(`${new Date().toISOString()} ${message}`);
 
@@ -60,7 +61,14 @@ async function main(): Promise<void> {
       const total = units * mapping.quantity;
       log(`[TikTok] Mapped: ${mapping.type} x${total}`);
       let commands;
-      try { commands = splitCommands(mapping.type, total); }
+      const gift = event.userId && event.viewerName ? {
+        batchId: randomUUID(), viewerId: event.userId,
+        viewerName: event.viewerName.trim().slice(0, 80),
+        giftId: event.giftId, giftName: mapping.name,
+        giftUnits: units,
+      } : undefined;
+      if (!gift) log('[TikTok] Stable viewer ID or public name unavailable; spawning without feed metadata');
+      try { commands = splitCommands(mapping.type, total, gift); }
       catch (error) { log(`[TikTok] Gift rejected: ${String(error)}`); return; }
       void (async () => {
         for (const command of commands) {

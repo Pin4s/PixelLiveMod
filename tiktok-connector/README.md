@@ -1,6 +1,6 @@
 # PixelLiveMod TikTok connector
 
-Requires Node.js 20+ and the PixelLiveMod 0.5.0 plugin in the isolated game copy.
+Requires Node.js 20+ and the PixelLiveMod 0.7.0 plugin in the isolated game copy.
 
 1. Copy `../.env.example` to `../.env` and set `TIKTOK_USERNAME` to a public LIVE account, with or without `@`. Set `PIXELLIVEMOD_BRIDGE_PORT` to the same value as `[Bridge] Port` in the game's BepInEx config (default 19081). The connector loads the project root `.env` automatically; existing environment variables take precedence.
 2. Copy `config.example.json` to `config.json` (kept local and ignored by Git). This file contains gift mappings and per-gift quantities. Restart the connector after configuration changes.
@@ -12,3 +12,7 @@ The nine gift entries have independent `quantity` values (1..20 per gift). `coin
 The connector uses `tiktok-live-connector@2.4.0`, an unofficial library. Its public connection uses Euler Stream signing with community rate limits; no account cookies or credentials are configured here. Catalog lookup may fail or a public LIVE may be offline, in which case the program logs the failure from each Room ID source and retries after 30 seconds. If the account is live and you have verified its current numeric Room ID, optionally set `TIKTOK_ROOM_ID` in the project root `.env` to bypass username lookup; remove it when the live ends. Neither a LIVE connection nor gift receipt is implied by a successful local build.
 
 TCP listens only on `127.0.0.1`. Each JSON-line command has a unique `requestId`, `type`, and `quantity` (1..20). The Unity response says whether the command was accepted *into the spawn queue*, not whether every ball was created. Actual creation/failure appears in `BepInEx/LogOutput.log`. A command with a lost acknowledgment is never resent automatically; its outcome is explicitly uncertain.
+
+For gifts with a stable numeric viewer ID and public name, commands also carry `batchId`, `viewerId`, `viewerName`, `giftId`, `giftName`, and incremental `giftUnits`. All chunks from one gift event use the same batch ID. The plugin associates this data with each accepted command and updates the in-game feed only after the spawn service reports the number actually created. Commands without gift metadata remain valid and never appear in the feed.
+
+To check the feed and podium without TikTok, start the isolated game, enter a playable scene, then run `npm run build` and `npm run simulate:feed` here. The script sends one simulated Rose from `teste_a`, three more two seconds later, and one from `teste_b`. It deliberately spawns five Orange balls in the active game with two distinct viewer IDs. It is a separate command and is never run by `npm start`.

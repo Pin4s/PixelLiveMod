@@ -2,15 +2,19 @@ import { randomUUID } from 'node:crypto';
 import { Socket } from 'node:net';
 import type { BallType } from './config.js';
 
-export interface SpawnCommand { requestId: string; type: BallType; quantity: number; }
+export interface GiftMetadata {
+  batchId: string; viewerId: string; viewerName: string;
+  giftId: string; giftName: string; giftUnits: number;
+}
+export interface SpawnCommand extends Partial<GiftMetadata> { requestId: string; type: BallType; quantity: number; }
 interface Pending { command: SpawnCommand; resolve: (accepted: boolean) => void; }
 
-export function splitCommands(type: BallType, total: number): SpawnCommand[] {
+export function splitCommands(type: BallType, total: number, gift?: GiftMetadata): SpawnCommand[] {
   if (!Number.isSafeInteger(total) || total < 1 || total > 10000)
     throw new Error(`Invalid mapped ball count ${total}; expected 1..10000`);
   const result: SpawnCommand[] = [];
   for (let remaining = total; remaining > 0; remaining -= 20)
-    result.push({ requestId: randomUUID(), type, quantity: Math.min(20, remaining) });
+    result.push({ requestId: randomUUID(), type, quantity: Math.min(20, remaining), ...gift });
   return result;
 }
 

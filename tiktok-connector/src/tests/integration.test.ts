@@ -59,15 +59,25 @@ test('conservative fallback requires exact name and cost', () => {
 test('v3 gift event fields and room catalog fields are parsed', () => {
   const parsed = parseGiftEvent({
     giftId: '101', repeatCount: 3, repeatEnd: 0, groupId: '777',
-    common: { msgId: '9001' }, user: { id: '42' },
+    common: { msgId: '9001' }, user: { id: '42', uniqueId: 'tha_math' },
     gift: { name: 'Rose', diamondCount: 1, type: 1 },
   });
   assert.deepEqual(parsed, {
-    giftId: '101', name: 'Rose', coins: 1, userId: '42', groupId: '777',
+    giftId: '101', name: 'Rose', coins: 1, userId: '42', viewerName: 'tha_math', groupId: '777',
     msgId: '9001', giftType: 1, repeatCount: 3, repeatEnd: false,
   });
   assert.deepEqual(parseCatalog([{ id: '101', name: 'Rose', diamond_count: 1 }]),
     [{ id: '101', name: 'Rose', coins: 1 }]);
+});
+
+test('protobuf Long viewer IDs remain precise and do not fall back to display names', () => {
+  const parsed = parseGiftEvent({
+    giftId: '101', repeatCount: 1, repeatEnd: 1,
+    user: { id: { toString: () => '9007199254740993123' }, uniqueId: 'viewer' },
+    common: { msgId: '89' }, gift: { type: 0 },
+  });
+  assert.equal(parsed?.userId, '9007199254740993123');
+  assert.equal(parsed?.viewerName, 'viewer');
 });
 
 test('verified explicit ID tolerates translated catalog name but not wrong cost', () => {
@@ -98,6 +108,15 @@ test('three Finger Hearts produce 15 balls; splitting respects 20 limit', () => 
   assert.deepEqual(splitCommands('Orange', total).map(c => c.quantity), [15]);
   assert.deepEqual(splitCommands('Orange', 55).map(c => c.quantity), [20, 20, 15]);
   assert.throws(() => splitCommands('Orange', 0));
+});
+
+test('split commands retain one gift batch and stable viewer identity', () => {
+  const gift = { batchId: 'batch-1', viewerId: '42', viewerName: 'tha_math',
+    giftId: '101', giftName: 'Rose', giftUnits: 55 };
+  const commands = splitCommands('Orange', 55, gift);
+  assert.deepEqual(commands.map(c => c.quantity), [20, 20, 15]);
+  assert.ok(commands.every(c => c.batchId === gift.batchId && c.viewerId === '42' && c.giftUnits === 55));
+  assert.equal(new Set(commands.map(c => c.requestId)).size, 3);
 });
 
 test('final-only fallback and duplicate individual message', () => {
