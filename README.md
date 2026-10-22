@@ -6,7 +6,7 @@ Plugin C# para **10 Million Pixels Demo** com BepInEx 5, acompanhado de um conec
 
 TikTok LIVE (presentes) → conector Node.js → JSON por TCP em `127.0.0.1:19081` → plugin Unity → fila de spawn.
 
-O conector identifica presentes pelo catálogo da sala (nome/ID e custo em moedas), trata sequências e envia comandos de 1 a 20 bolas. O plugin aceita comandos na thread principal do Unity, coloca as bolas na fila e responde se **enfileirou** o pedido. A resposta não confirma a criação de todas as bolas; o resultado aparece em `BepInEx/LogOutput.log`. A ponte escuta somente na interface local.
+O conector identifica presentes pelo catálogo da sala (nome/ID e custo em moedas), trata sequências e envia comandos de 1 a 20 bolas. O plugin aceita comandos na thread principal do Unity, coloca as bolas na fila e responde se **enfileirou** o pedido. A resposta não confirma a criação de todas as bolas; o resultado aparece em `BepInEx/LogOutput.log` e alimenta o feed após a conclusão. A ponte escuta somente na interface local.
 
 O plugin usa C# e .NET Standard 2.1 com BepInEx 5.4.23.5 e assemblies Unity da cópia local do jogo. O conector usa Node.js 20+, TypeScript e `tiktok-live-connector` 2.4.0.
 
@@ -94,3 +94,25 @@ As hotkeys usam a posição atual do mouse no mundo do jogo. As quantidades fica
 - Se o catálogo falhar, o fallback exige nome e custo exatos; presentes sem identificação confiável são ignorados. Um comando sem confirmação TCP não é reenviado automaticamente.
 - O serviço aceita no máximo 100 bolas pendentes e processa até 5 por frame. Pedidos podem ser rejeitados ou concluir parcialmente se a cena, a posição ou a capacidade não permitirem o spawn.
 - A cópia isolada do jogo compartilha o diretório de saves em `%USERPROFILE%\AppData\LocalLow\BATTLE LAB\10 Million Pixels Demo\save`. Faça backup antes de testar. O plugin não faz reset de saves. A Golden Ball não possui hotkey nesta versão.
+
+## Feed de presentes no jogo
+
+O conector envia, junto aos comandos TCP, o ID estável do espectador, nome público, ID e nome do presente, quantidade incremental e um ID de lote. O plugin correlaciona cada `requestId` com o resultado final do `BallSpawnService`. Somente bolas efetivamente criadas entram no feed; uma aceitação na fila não equivale a uma invocação. As hotkeys continuam sem metadados de presente e não geram mensagens.
+
+Mensagens visíveis com o mesmo ID de espectador e ID de presente são atualizadas no mesmo elemento. Os comandos de até 20 bolas gerados por um único evento compartilham o ID de lote: os presentes são contados uma vez, enquanto as bolas são somadas conforme cada comando termina. O feed mostra até cinco mensagens na lateral direita e usa uma fonte do próprio jogo, preferindo `Perfect DOS VGA 437` quando disponível. A renderização usa TextMeshPro sem painel, sombra ou som. A duração e as animações usam tempo real do Unity. Se o evento não tiver ID estável de espectador ou nome público, as bolas ainda são solicitadas, mas o feed não atribui o envio a uma pessoa incerta.
+
+As opções ficam em `[GiftFeed]` no arquivo `BepInEx/config/com.pixellive.mod.cfg`: `GiftFeedEnabled=true`, `GiftFeedDuration=5`, `GiftFeedFadeInDuration=0.2`, `GiftFeedFadeOutDuration=0.4`, `GiftFeedMaxVisible=5` e `GiftFeedFontSize=20`. O tamanho foi escolhido para a referência de 1920x1080 do CanvasScaler e pode ser ajustado se a escala real da transmissão exigir.
+
+Para testar sem uma live, inicie a cópia isolada, entre numa cena jogável e execute `npm run build` seguido de `npm run simulate:feed` em `tiktok-connector`. O comando cria cinco bolas laranjas de teste; o primeiro espectador deve passar de `1 Rosa / 1 Bola Laranja` para `4 Rosas / 4 Bolas Laranjas` na mesma entrada. Um segundo espectador deve aparecer separadamente. Confira `BepInEx/LogOutput.log` para a fonte selecionada, as aceitações na fila e os resultados `created=`. Uma live real ainda depende de eventos disponíveis na conta conectada.
+
+## PÓDIO DOS PIXELS
+
+O pódio mostra os cinco espectadores cujas bolas de presentes destruíram mais pixels na sessão atual. Cada bola criada por um comando com ID estável de espectador recebe um componente de autoria. Hotkeys e bolas nativas não recebem esse componente. O placar usa o mesmo ID estável do feed; espectadores com nomes públicos iguais permanecem separados.
+
+O rastreador observa `WorldManager.BreakTile` com Harmony e só atribui um ponto quando o tile passa de `type > 0` para `type == 0`. Danos parciais, células já vazias e mudanças sem uma origem de bola identificada não pontuam. Um contexto temporário, restaurado após cada chamada, acompanha a colisão nativa, os raios da Yellow Ball e a coroutine de veneno da Green Ball. Novos objetos de veneno herdam a autoria do objeto que os criou; essa associação é removida quando voltam ao pool. A explosão da Inferno Ball conserva a autoria da bola original até terminar, contando apenas os tiles realmente destruídos pelo dano nativo. Na versão atual do jogo, a Pink Ball destrói tiles pela colisão em `PhysicsAgent`, sem outro caminho de `DamageTile` identificado.
+
+`PixelLeaderboardService` guarda todos os participantes e os totais em memória, independentemente de aparecerem no top 5. O ranking é ordenado somente nos intervalos de atualização visual; em empate, fica primeiro quem alcançou o total antes. O painel usa a mesma fonte selecionada pelo feed, moldura reta e fundo escuro, ouro/prata/bronze nas três primeiras posições, e aparece acima do feed na lateral direita. Os pontos não são gravados em disco. O pódio é zerado quando a vitória nativa é confirmada ou quando o jogador confirma `Settings → Reset All Data`; referências de bolas da partida anterior deixam de pontuar.
+
+As opções `[PixelLeaderboard]` no arquivo `BepInEx/config/com.pixellive.mod.cfg` são `PixelLeaderboardEnabled=true`, `PixelLeaderboardMaxVisible=5` (1–5), `PixelLeaderboardRefreshInterval=0.2` e `PixelLeaderboardFontSize=20`.
+
+Para verificar a integração sem presentes reais, feche o conector de live, inicie a cópia isolada, entre numa cena jogável e execute `npm run simulate:feed` em `tiktok-connector`. Esse simulador envia bolas de dois IDs de espectadores diferentes. Observe o pódio enquanto cada bola destrói pixels: o total deve crescer apenas quando uma célula desaparece, e as pontuações devem permanecer após as mensagens do feed sumirem. Para conferir a estrutura nativa usada pelo rastreador, execute `./tests/Inspect-NativeDestruction.ps1`; para os testes de contagem e ordenação, execute `dotnet run --project ./tests/PixelLeaderboardTests.csproj -c Release`.
