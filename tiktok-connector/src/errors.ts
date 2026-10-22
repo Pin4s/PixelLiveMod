@@ -40,3 +40,17 @@ export function formatTikTokError(value: unknown): string {
   };
   return describe(value, 0);
 }
+
+/** Honor the sign server's retry-after value when a connection is rate limited. */
+export function retryDelayForTikTokError(value: unknown, fallbackMs = 30000): number {
+  const seen = new Set<object>();
+  let current = value;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const error = current as Record<string, unknown>;
+    if (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter > 0)
+      return Math.min(Math.max(Math.ceil(error.retryAfter), fallbackMs), 2147483647);
+    current = error.exception ?? error.cause;
+  }
+  return fallbackMs;
+}

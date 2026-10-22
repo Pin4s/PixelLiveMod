@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "dotenv": "18.0.8",
-    "tiktok-live-connector": "2.4.0"
+    "tiktok-live-connector": "2.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.18",

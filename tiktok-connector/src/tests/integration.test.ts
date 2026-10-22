@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { test } from 'node:test';
+import { SignatureRateLimitError } from 'tiktok-live-connector';
 import { BridgeClient, splitCommands } from '../bridge.js';
 import { normalizeUsername, validateConfig } from '../config.js';
-import { formatTikTokError } from '../errors.js';
+import { formatTikTokError, retryDelayForTikTokError } from '../errors.js';
 import { GiftResolver, parseCatalog, parseGiftEvent, type GiftEvent } from '../gifts.js';
 import { SequenceCounter } from '../sequence.js';
 
@@ -146,10 +147,14 @@ test('configuration rejects duplicate gifts and invalid quantity; @ normalized',
 test('personal and local values come from environment, not gift config', () => {
   const withLegacyValues = { ...exampleConfig, tiktokUsername: 'old-user', bridgePort: 12345 };
   const loaded = validateConfig(withLegacyValues, true,
-    { TIKTOK_USERNAME: '@live.user', PIXELLIVEMOD_BRIDGE_PORT: '19082' });
+    { TIKTOK_USERNAME: '@live.user', EULER_STREAM_API_KEY: ' test-key ', PIXELLIVEMOD_BRIDGE_PORT: '19082' });
   assert.equal(loaded.tiktokUsername, 'live.user');
   assert.equal(loaded.tiktokRoomId, undefined);
+  assert.equal(loaded.eulerStreamApiKey, 'test-key');
   assert.equal(loaded.bridgePort, 19082);
+  assert.equal(validateConfig(exampleConfig, true,
+    { TIKTOK_USERNAME: 'live.user', EULER_STREAM_API_KEY: ' ', PIXELLIVEMOD_BRIDGE_PORT: '19081' }).eulerStreamApiKey,
+    undefined);
   assert.equal(validateConfig(exampleConfig, true,
     { TIKTOK_USERNAME: 'live.user', TIKTOK_ROOM_ID: '123456789', PIXELLIVEMOD_BRIDGE_PORT: '19081' }).tiktokRoomId,
     '123456789');
@@ -172,6 +177,17 @@ test('connection failure logs each Room ID source instead of object placeholders
   assert.match(message, /source 2: Error: API user_not_found/);
   assert.match(message, /source 3: Error: Euler permission denied/);
   assert.doesNotMatch(message, /\[object Object\]/);
+});
+
+test('sign server rate limit preserves its cause and controls reconnection delay', () => {
+  const error = new SignatureRateLimitError(undefined, 'Too many connections started.',
+    { headers: { 'retry-after': '1116', 'x-ratelimit-reset': '1234567890' } });
+  assert.match(formatTikTokError(error), /SignatureRateLimitError: \[Rate Limited\]/);
+  assert.equal(error.retryAfter, 1116000);
+  assert.equal(retryDelayForTikTokError(error), 1116000);
+  assert.equal(retryDelayForTikTokError({ exception: error }), 1116000);
+  assert.equal(retryDelayForTikTokError(new Error('offline')), 30000);
+  assert.equal(retryDelayForTikTokError({ retryAfter: 1000 }), 30000);
 });
 
 test('JSON-line bridge receives a command and distinguishes queued acknowledgment', async () => {

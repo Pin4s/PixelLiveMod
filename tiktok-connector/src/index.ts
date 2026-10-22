@@ -1,10 +1,11 @@
 import { ControlEvent, TikTokLiveConnection, WebcastEvent } from 'tiktok-live-connector';
 import { BridgeClient, splitCommands } from './bridge.js';
 import { loadConfig } from './config.js';
-import { formatTikTokError } from './errors.js';
+import { formatTikTokError, retryDelayForTikTokError } from './errors.js';
 import { GiftResolver, parseCatalog, parseGiftEvent } from './gifts.js';
 import { SequenceCounter } from './sequence.js';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const log = (message: string): void => console.log(`${new Date().toISOString()} ${message}`);
 
@@ -14,9 +15,11 @@ async function main(): Promise<void> {
   bridge.start();
   const counter = new SequenceCounter(log);
   let stopped = false;
+  const retryAbort = new AbortController();
   let currentConnection: TikTokLiveConnection | null = null;
   const stop = (): void => {
     stopped = true;
+    retryAbort.abort();
     bridge.stop();
     void currentConnection?.disconnect().catch(error => log(`[TikTok] Shutdown error: ${String(error)}`));
   };
@@ -26,6 +29,7 @@ async function main(): Promise<void> {
   while (!stopped) {
     const resolver = new GiftResolver(config.gifts, log);
     const connection = new TikTokLiveConnection(config.tiktokUsername, {
+      signApiKey: config.eulerStreamApiKey,
       processInitialData: false,
       enableExtendedGiftInfo: false,
     });
@@ -94,7 +98,7 @@ async function main(): Promise<void> {
       await disconnected;
     } catch (error) {
       log(`[TikTok] Connection failed: ${formatTikTokError(error)}`);
-      retryDelayMs = 30000;
+      retryDelayMs = retryDelayForTikTokError(error);
     } finally {
       catalogReady = false;
       try { await connection.disconnect(); } catch (error) { log(`[TikTok] Disconnect cleanup error: ${String(error)}`); }
@@ -102,7 +106,7 @@ async function main(): Promise<void> {
     }
     if (!stopped) {
       log(`[TikTok] Reconnecting in ${retryDelayMs / 1000} seconds`);
-      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      await sleep(retryDelayMs, undefined, { signal: retryAbort.signal }).catch(() => {});
     }
   }
 }
