@@ -14,6 +14,7 @@ public sealed class PixelLiveMod : BaseUnityPlugin
     private LiveGiftFeed? _giftFeed;
     private PixelLeaderboardService? _leaderboard;
     private PixelDestructionTracker? _destructionTracker;
+    private GoldenPixelCollisionPatch? _goldenPixelCollision;
     private InfernoSettings? _infernoSettings;
     private ConfigEntry<int>? _infernoQuantity;
     private float _nextInfernoAllowedAt;
@@ -42,6 +43,8 @@ public sealed class PixelLiveMod : BaseUnityPlugin
             $"Number of Inferno Balls for F9. Valid range: 1..{BallSpawnService.MaxBallsPerCommand}.");
         _infernoSettings = InfernoSettings.Bind(Config);
         _spawner = new BallSpawnService(this, Logger);
+        _goldenPixelCollision = new GoldenPixelCollisionPatch(Logger);
+        _goldenPixelCollision.Install();
         bool feedEnabled = Config.Bind("GiftFeed", "GiftFeedEnabled", true,
             "Show a small in-game feed for confirmed TikTok gift spawns.").Value;
         float feedDuration = Config.Bind("GiftFeed", "GiftFeedDuration", 5f,
@@ -191,6 +194,7 @@ public sealed class PixelLiveMod : BaseUnityPlugin
     {
         _bridge?.Dispose();
         _destructionTracker?.Dispose();
+        _goldenPixelCollision?.Dispose();
     }
 
     private void HandleInfernoHotkey()
