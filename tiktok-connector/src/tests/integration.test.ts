@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import { test } from 'node:test';
 import { BridgeClient, splitCommands } from '../bridge.js';
 import { normalizeUsername, validateConfig } from '../config.js';
+import { formatTikTokError } from '../errors.js';
 import { GiftResolver, parseCatalog, parseGiftEvent, type GiftEvent } from '../gifts.js';
 import { SequenceCounter } from '../sequence.js';
 
@@ -128,11 +129,30 @@ test('personal and local values come from environment, not gift config', () => {
   const loaded = validateConfig(withLegacyValues, true,
     { TIKTOK_USERNAME: '@live.user', PIXELLIVEMOD_BRIDGE_PORT: '19082' });
   assert.equal(loaded.tiktokUsername, 'live.user');
+  assert.equal(loaded.tiktokRoomId, undefined);
   assert.equal(loaded.bridgePort, 19082);
+  assert.equal(validateConfig(exampleConfig, true,
+    { TIKTOK_USERNAME: 'live.user', TIKTOK_ROOM_ID: '123456789', PIXELLIVEMOD_BRIDGE_PORT: '19081' }).tiktokRoomId,
+    '123456789');
+  assert.throws(() => validateConfig(exampleConfig, true,
+    { TIKTOK_USERNAME: 'live.user', TIKTOK_ROOM_ID: 'old-room', PIXELLIVEMOD_BRIDGE_PORT: '19081' }), /TIKTOK_ROOM_ID/);
   assert.throws(() => validateConfig(exampleConfig, true,
     { PIXELLIVEMOD_BRIDGE_PORT: '19081' }), /TIKTOK_USERNAME/);
   assert.throws(() => validateConfig(exampleConfig, true,
     { TIKTOK_USERNAME: 'live.user', PIXELLIVEMOD_BRIDGE_PORT: 'invalid' }), /PIXELLIVEMOD_BRIDGE_PORT/);
+});
+
+test('connection failure logs each Room ID source instead of object placeholders', () => {
+  const error = new Error('Failed to retrieve Room ID from all sources.');
+  Object.assign(error, { config: { routeId: 'fetchRoomIdRoute', requestErrs: [
+    new Error('HTML LiveRoom missing'), new Error('API user_not_found'), new Error('Euler permission denied'),
+  ] } });
+  const message = formatTikTokError({ info: 'Room ID lookup failed', exception: error });
+  assert.match(message, /Room ID lookup failed/);
+  assert.match(message, /source 1: Error: HTML LiveRoom missing/);
+  assert.match(message, /source 2: Error: API user_not_found/);
+  assert.match(message, /source 3: Error: Euler permission denied/);
+  assert.doesNotMatch(message, /\[object Object\]/);
 });
 
 test('JSON-line bridge receives a command and distinguishes queued acknowledgment', async () => {

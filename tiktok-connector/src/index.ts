@@ -1,6 +1,7 @@
 import { ControlEvent, TikTokLiveConnection, WebcastEvent } from 'tiktok-live-connector';
 import { BridgeClient, splitCommands } from './bridge.js';
 import { loadConfig } from './config.js';
+import { formatTikTokError } from './errors.js';
 import { GiftResolver, parseCatalog, parseGiftEvent } from './gifts.js';
 import { SequenceCounter } from './sequence.js';
 
@@ -32,9 +33,14 @@ async function main(): Promise<void> {
     // although the installed runtime and README expose the method.
     const events = connection as unknown as { on(name: string, handler: (value: any) => void): void };
     let catalogReady = false;
+    let connecting = true;
+    let retryDelayMs = 5000;
     let disconnect!: () => void;
     const disconnected = new Promise<void>(resolve => { disconnect = resolve; });
-    events.on(ControlEvent.ERROR, (error: unknown) => log(`[TikTok] Error: ${String(error)}`));
+    events.on(ControlEvent.ERROR, (error: unknown) => {
+      // connect() also rejects with this error; report it once in the catch block.
+      if (!connecting) log(`[TikTok] Error: ${formatTikTokError(error)}`);
+    });
     events.on(ControlEvent.DISCONNECTED, (event: { code: number; reason?: string }) => {
       log(`[TikTok] Disconnected: code=${event.code}, reason=${event.reason ?? 'unknown'}`);
       disconnect();
@@ -65,8 +71,9 @@ async function main(): Promise<void> {
     });
 
     try {
-      log(`[TikTok] Connecting to @${config.tiktokUsername}`);
-      const state = await connection.connect();
+      log(`[TikTok] Connecting to @${config.tiktokUsername}${config.tiktokRoomId ? `, room=${config.tiktokRoomId}` : ''}`);
+      const state = await connection.connect(config.tiktokRoomId);
+      connecting = false;
       log(`[TikTok] Connected to @${config.tiktokUsername}, room=${state.roomId || '<unknown>'}`);
       try {
         const catalog = parseCatalog(await connection.fetchAvailableGifts());
@@ -78,15 +85,16 @@ async function main(): Promise<void> {
       catalogReady = true;
       await disconnected;
     } catch (error) {
-      log(`[TikTok] Connection failed: ${String(error)}`);
+      log(`[TikTok] Connection failed: ${formatTikTokError(error)}`);
+      retryDelayMs = 30000;
     } finally {
       catalogReady = false;
       try { await connection.disconnect(); } catch (error) { log(`[TikTok] Disconnect cleanup error: ${String(error)}`); }
       currentConnection = null;
     }
     if (!stopped) {
-      log('[TikTok] Reconnecting in 5 seconds');
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      log(`[TikTok] Reconnecting in ${retryDelayMs / 1000} seconds`);
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
     }
   }
 }

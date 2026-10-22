@@ -12,6 +12,7 @@ export interface GiftMapping {
 }
 export interface AppConfig {
   tiktokUsername: string;
+  tiktokRoomId?: string;
   bridgePort: number;
   gifts: GiftMapping[];
 }
@@ -29,6 +30,9 @@ export function validateConfig(raw: unknown, requireUsername = true, env: NodeJS
   const username = normalizeUsername(env.TIKTOK_USERNAME ?? '');
   if (requireUsername && !/^[\w.]{2,30}$/.test(username))
     throw new Error('Set TIKTOK_USERNAME to a valid public-live @username in the project .env');
+  const roomId = env.TIKTOK_ROOM_ID?.trim();
+  if (roomId && !/^\d+$/.test(roomId))
+    throw new Error('TIKTOK_ROOM_ID must be a numeric ID of the current LIVE room when supplied');
   const bridgePort = Number(env.PIXELLIVEMOD_BRIDGE_PORT);
   if (!/^\d+$/.test(env.PIXELLIVEMOD_BRIDGE_PORT ?? '') || !Number.isInteger(bridgePort) || bridgePort < 1024 || bridgePort > 65535)
     throw new Error('Set PIXELLIVEMOD_BRIDGE_PORT in the project .env to an integer from 1024 to 65535');
@@ -61,7 +65,7 @@ export function validateConfig(raw: unknown, requireUsername = true, env: NodeJS
     return gift as unknown as GiftMapping;
   });
   for (const name of allowedNames) if (!seen.has(name)) throw new Error(`Missing gift: ${name}`);
-  return { tiktokUsername: username, bridgePort, gifts };
+  return { tiktokUsername: username, tiktokRoomId: roomId || undefined, bridgePort, gifts };
 }
 
 export function loadConfig(): AppConfig {
