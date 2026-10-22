@@ -20,6 +20,8 @@ public sealed class BallSpawnService
     private readonly Queue<SpawnRequest> _queue = new Queue<SpawnRequest>();
     private int _queuedBalls;
     private int _nextRequestId;
+    public event Action<string, int, int>? CommandCompleted;
+    public event Action<string, GameObject>? BallCreated;
 
     public BallSpawnService(MonoBehaviour host, ManualLogSource log)
     {
@@ -30,15 +32,17 @@ public sealed class BallSpawnService
 
     // Returns true only when the whole command was accepted into the queue.
     // Completion, including partial failure, is reported in the log.
-    public bool SpawnBalls(UpgradeManager.BallColor color, int quantity, Vector3 worldPosition)
-        => Enqueue(color, quantity, worldPosition, false, default);
+    public bool SpawnBalls(UpgradeManager.BallColor color, int quantity, Vector3 worldPosition,
+        string? correlationId = null)
+        => Enqueue(color, quantity, worldPosition, false, default, correlationId);
 
     // A separate command kind leaves the game's BallColor enum unchanged.
-    public bool SpawnInfernoBalls(int quantity, Vector3 worldPosition, InfernoParameters parameters)
-        => Enqueue(UpgradeManager.BallColor.Orange, quantity, worldPosition, true, parameters);
+    public bool SpawnInfernoBalls(int quantity, Vector3 worldPosition, InfernoParameters parameters,
+        string? correlationId = null)
+        => Enqueue(UpgradeManager.BallColor.Orange, quantity, worldPosition, true, parameters, correlationId);
 
     private bool Enqueue(UpgradeManager.BallColor color, int quantity,
-        Vector3 worldPosition, bool inferno, InfernoParameters parameters)
+        Vector3 worldPosition, bool inferno, InfernoParameters parameters, string? correlationId)
     {
         string typeName = inferno ? "Inferno" : color.ToString();
         if (!IsMainThread())
@@ -78,7 +82,7 @@ public sealed class BallSpawnService
         }
 
         SpawnRequest request = new SpawnRequest(++_nextRequestId, color, quantity,
-            worldPosition, inferno, parameters);
+            worldPosition, inferno, parameters, correlationId);
         _queue.Enqueue(request);
         _queuedBalls += quantity;
         _log.LogInfo($"Spawn command #{request.Id} queued: {typeName}, requested={quantity}, " +
@@ -120,7 +124,7 @@ public sealed class BallSpawnService
             while (frameBudget > 0 && request.Remaining > 0)
             {
                 int ordinal = request.Requested - request.Remaining;
-                bool success = TrySpawnOne(context, request.Id, request.WorldPosition,
+                bool success = TrySpawnOne(context, request.Id, request.CorrelationId, request.WorldPosition,
                     ordinal, request.Inferno, request.InfernoParameters, out string result);
                 request.Remaining--;
                 _queuedBalls--;
@@ -157,6 +161,11 @@ public sealed class BallSpawnService
         _log.LogInfo($"Spawn command #{request.Id} finished: type={(request.Inferno ? "Inferno" : request.Color.ToString())}, " +
             $"requested={request.Requested}, created={request.Created}, " +
             $"not created={request.Requested - request.Created}");
+        if (request.CorrelationId != null)
+        {
+            try { CommandCompleted?.Invoke(request.CorrelationId, request.Requested, request.Created); }
+            catch (Exception error) { _log.LogError($"Spawn completion observer failed: {error}"); }
+        }
     }
 
     private bool TryResolveContext(
@@ -308,7 +317,7 @@ public sealed class BallSpawnService
         }
     }
 
-    private bool TrySpawnOne(SpawnContext context, int requestId, Vector3 requestedPosition,
+    private bool TrySpawnOne(SpawnContext context, int requestId, string? correlationId, Vector3 requestedPosition,
         int ordinal, bool inferno, InfernoParameters parameters, out string result)
     {
         GameObject? created = null;
@@ -351,6 +360,12 @@ public sealed class BallSpawnService
                 context.ButtonForce * speedMultiplier;
             body.AddForce(force);
             _host.StartCoroutine(VerifyNativeStart(created, requestId, ordinal + 1));
+
+            if (correlationId != null)
+            {
+                try { BallCreated?.Invoke(correlationId, created); }
+                catch (Exception error) { _log.LogError($"Ball creation observer failed: {error}"); }
+            }
 
             // Native Ball.Start registers the ball with BallManager; native
             // Ball.OnDestroy removes it. Do not alter recall or save lists.
@@ -504,12 +519,13 @@ public sealed class BallSpawnService
         public readonly Vector3 WorldPosition;
         public readonly bool Inferno;
         public readonly InfernoParameters InfernoParameters;
+        public readonly string? CorrelationId;
         public int Remaining;
         public int Created;
         public bool PrefabLogged;
 
         public SpawnRequest(int id, UpgradeManager.BallColor color, int quantity,
-            Vector3 worldPosition, bool inferno, InfernoParameters infernoParameters)
+            Vector3 worldPosition, bool inferno, InfernoParameters infernoParameters, string? correlationId)
         {
             Id = id;
             Color = color;
@@ -517,6 +533,7 @@ public sealed class BallSpawnService
             WorldPosition = worldPosition;
             Inferno = inferno;
             InfernoParameters = infernoParameters;
+            CorrelationId = correlationId;
             Remaining = quantity;
         }
     }
