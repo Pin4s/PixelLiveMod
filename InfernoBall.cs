@@ -51,7 +51,8 @@ public sealed class InfernoBall : MonoBehaviour
                 ? collision.GetContact(0).point
                 : new Vector2(cell.x - world.worldSize / 2 + 0.5f,
                     cell.y - world.worldSize / 2 + 0.5f);
-            if (!InfernoExplosion.TryCreate(world, impact, _parameters, _log,
+            PixelParticipant? owner = GetComponent<PixelBallOwner>()?.Participant;
+            if (!InfernoExplosion.TryCreate(world, impact, _parameters, _log, owner,
                 out string reason))
             {
                 if (!_capacityWarningLogged)

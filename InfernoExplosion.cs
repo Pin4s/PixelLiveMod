@@ -16,6 +16,7 @@ public sealed class InfernoExplosion : MonoBehaviour
 
     private WorldManager? _world;
     private ManualLogSource? _log;
+    private PixelParticipant? _owner;
     private InfernoParameters _parameters;
     private Vector2 _impact;
     private CellOffset[]? _cells;
@@ -43,8 +44,8 @@ public sealed class InfernoExplosion : MonoBehaviour
     public static bool IsOrdinaryDestructible(Tile tile) =>
         tile.currentHealth > 0 && ((tile.type >= 1 && tile.type <= 7) || tile.type == 66);
 
-    public static bool TryCreate(WorldManager world, Vector2 impact,
-        InfernoParameters parameters, ManualLogSource log, out string reason)
+    internal static bool TryCreate(WorldManager world, Vector2 impact,
+        InfernoParameters parameters, ManualLogSource log, PixelParticipant? owner, out string reason)
     {
         reason = "";
         if (world == null || world.worldTiles == null || world.physicsChunks == null ||
@@ -71,6 +72,7 @@ public sealed class InfernoExplosion : MonoBehaviour
             InfernoExplosion explosion = effect.AddComponent<InfernoExplosion>();
             explosion._world = world;
             explosion._log = log;
+            explosion._owner = owner;
             explosion._parameters = parameters;
             explosion._impact = impact;
             Pending.Add(explosion);
@@ -234,7 +236,8 @@ public sealed class InfernoExplosion : MonoBehaviour
             return;
         }
 
-        world.DamageTile(x, y, _parameters.Damage);
+        using (PixelAttributionContext.Begin(_owner))
+            world.DamageTile(x, y, _parameters.Damage);
         _damaged++;
         // Tile is a value type; reread the array after the native mutation.
         if (tiles[x, y].type == 0)

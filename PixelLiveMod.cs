@@ -3,7 +3,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using UnityEngine;
 
-[BepInPlugin("com.pixellive.mod", "PixelLiveMod", "0.5.0")]
+[BepInPlugin("com.pixellive.mod", "PixelLiveMod", "0.7.0")]
 public sealed class PixelLiveMod : BaseUnityPlugin
 {
     private const float HotkeyCooldownSeconds = 0.5f;
@@ -11,6 +11,9 @@ public sealed class PixelLiveMod : BaseUnityPlugin
     private HotkeyBinding[] _hotkeys = Array.Empty<HotkeyBinding>();
     private BallSpawnService? _spawner;
     private LocalSpawnBridge? _bridge;
+    private LiveGiftFeed? _giftFeed;
+    private PixelLeaderboardService? _leaderboard;
+    private PixelDestructionTracker? _destructionTracker;
     private InfernoSettings? _infernoSettings;
     private ConfigEntry<int>? _infernoQuantity;
     private float _nextInfernoAllowedAt;
@@ -39,16 +42,58 @@ public sealed class PixelLiveMod : BaseUnityPlugin
             $"Number of Inferno Balls for F9. Valid range: 1..{BallSpawnService.MaxBallsPerCommand}.");
         _infernoSettings = InfernoSettings.Bind(Config);
         _spawner = new BallSpawnService(this, Logger);
+        bool feedEnabled = Config.Bind("GiftFeed", "GiftFeedEnabled", true,
+            "Show a small in-game feed for confirmed TikTok gift spawns.").Value;
+        float feedDuration = Config.Bind("GiftFeed", "GiftFeedDuration", 5f,
+            "Seconds visible after the latest created ball.").Value;
+        float feedFadeIn = Config.Bind("GiftFeed", "GiftFeedFadeInDuration", 0.2f,
+            "Fade-in duration in real-time seconds.").Value;
+        float feedFadeOut = Config.Bind("GiftFeed", "GiftFeedFadeOutDuration", 0.4f,
+            "Fade-out duration in real-time seconds.").Value;
+        int feedMaxVisible = Config.Bind("GiftFeed", "GiftFeedMaxVisible", 5,
+            "Maximum simultaneous gift messages.").Value;
+        int feedFontSize = Config.Bind("GiftFeed", "GiftFeedFontSize", 20,
+            "TMP font size at a 1920x1080 reference resolution.").Value;
+        if (feedEnabled)
+        {
+            _giftFeed = gameObject.AddComponent<LiveGiftFeed>();
+            _giftFeed.Configure(Mathf.Clamp(feedDuration, 0.5f, 60f),
+                Mathf.Clamp(feedFadeIn, 0f, 2f), Mathf.Clamp(feedFadeOut, 0f, 3f),
+                Mathf.Clamp(feedMaxVisible, 1, 10), Mathf.Clamp(feedFontSize, 12, 36), Logger);
+        }
+        bool leaderboardEnabled = Config.Bind("PixelLeaderboard", "PixelLeaderboardEnabled", true,
+            "Show the in-game podium for pixels destroyed by TikTok gift balls.").Value;
+        int leaderboardMax = Config.Bind("PixelLeaderboard", "PixelLeaderboardMaxVisible", 5,
+            "Visible podium positions, from 1 to 5.").Value;
+        float leaderboardRefresh = Config.Bind("PixelLeaderboard", "PixelLeaderboardRefreshInterval", 0.2f,
+            "Seconds between visual score updates; internal counting remains immediate.").Value;
+        int leaderboardFontSize = Config.Bind("PixelLeaderboard", "PixelLeaderboardFontSize", 20,
+            "Podium row font size at a 1920x1080 reference resolution.").Value;
+        if (leaderboardEnabled)
+        {
+            var candidate = new PixelLeaderboardService();
+            _destructionTracker = new PixelDestructionTracker(candidate, Logger);
+            if (_destructionTracker.Install())
+            {
+                _leaderboard = candidate;
+                _giftFeed?.SetTop(360f);
+                gameObject.AddComponent<PixelLeaderboardView>().Configure(candidate,
+                    Mathf.Clamp(leaderboardMax, 1, 5),
+                    Mathf.Clamp(leaderboardRefresh, 0.05f, 1f),
+                    Mathf.Clamp(leaderboardFontSize, 12, 32), Logger);
+            }
+        }
         int bridgePort = Config.Bind("Bridge", "Port", 19081,
             "Local TCP port for the TikTok connector (127.0.0.1 only). Restart required.").Value;
         if (bridgePort < 1024 || bridgePort > 65535)
             Logger.LogError($"[Bridge] Invalid port {bridgePort}; expected 1024..65535");
         else
         {
-            _bridge = new LocalSpawnBridge(bridgePort, _spawner, () => _infernoSettings!, Logger);
+            _bridge = new LocalSpawnBridge(bridgePort, _spawner, () => _infernoSettings!, Logger,
+                _giftFeed, _leaderboard);
             _bridge.Start();
         }
-        Logger.LogInfo("PixelLiveMod initialized successfully (0.5.0)");
+        Logger.LogInfo("PixelLiveMod initialized successfully (0.7.0)");
         Logger.LogInfo($"Game data path: {Application.dataPath}");
         Logger.LogInfo($"Plugin assembly path: {typeof(PixelLiveMod).Assembly.Location}");
         foreach (HotkeyBinding binding in _hotkeys)
@@ -145,6 +190,7 @@ public sealed class PixelLiveMod : BaseUnityPlugin
     private void OnDestroy()
     {
         _bridge?.Dispose();
+        _destructionTracker?.Dispose();
     }
 
     private void HandleInfernoHotkey()

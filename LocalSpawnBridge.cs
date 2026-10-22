@@ -20,6 +20,9 @@ internal sealed class LocalSpawnBridge : IDisposable
     private readonly BallSpawnService _spawner;
     private readonly Func<InfernoSettings> _infernoSettings;
     private readonly ManualLogSource _log;
+    private readonly LiveGiftFeed? _feed;
+    private readonly PixelLeaderboardService? _leaderboard;
+    private readonly Dictionary<string, PendingGift> _giftCommands = new Dictionary<string, PendingGift>();
     private readonly ConcurrentQueue<Incoming> _incoming = new ConcurrentQueue<Incoming>();
     private readonly HashSet<string> _seen = new HashSet<string>(StringComparer.Ordinal);
     private readonly Queue<string> _seenOrder = new Queue<string>();
@@ -30,12 +33,17 @@ internal sealed class LocalSpawnBridge : IDisposable
     private int _connectionNumber;
 
     internal LocalSpawnBridge(int port, BallSpawnService spawner,
-        Func<InfernoSettings> infernoSettings, ManualLogSource log)
+        Func<InfernoSettings> infernoSettings, ManualLogSource log, LiveGiftFeed? feed = null,
+        PixelLeaderboardService? leaderboard = null)
     {
         _port = port;
         _spawner = spawner;
         _infernoSettings = infernoSettings;
         _log = log;
+        _feed = feed;
+        _leaderboard = leaderboard;
+        _spawner.CommandCompleted += OnCommandCompleted;
+        _spawner.BallCreated += OnBallCreated;
     }
 
     internal void Start()
@@ -181,13 +189,18 @@ internal sealed class LocalSpawnBridge : IDisposable
             {
                 if (!_infernoSettings().TrySnapshot(out InfernoParameters parameters, out string reason))
                     return new BridgeResponse(id, false, $"Inferno configuration invalid: {reason}");
-                accepted = _spawner.SpawnInfernoBalls(request.Quantity, position, parameters);
+                accepted = _spawner.SpawnInfernoBalls(request.Quantity, position, parameters, id);
             }
             else
             {
                 UpgradeManager.BallColor color = (UpgradeManager.BallColor)Enum.Parse(
                     typeof(UpgradeManager.BallColor), request.Type);
-                accepted = _spawner.SpawnBalls(color, request.Quantity, position);
+                accepted = _spawner.SpawnBalls(color, request.Quantity, position, id);
+            }
+            if (accepted && HasValidGiftMetadata(request))
+            {
+                PixelParticipant? participant = _leaderboard?.Register(request.ViewerId!, request.ViewerName!);
+                _giftCommands[id] = new PendingGift(request, participant);
             }
             return new BridgeResponse(id, accepted, accepted ? "queued, not yet created" : "spawn service rejected; see Unity log");
         }
@@ -196,6 +209,33 @@ internal sealed class LocalSpawnBridge : IDisposable
             _log.LogError($"[Bridge] Command {id} failed: {error}");
             return new BridgeResponse(id, false, "exception; see Unity log");
         }
+    }
+
+    private static bool HasValidGiftMetadata(BridgeRequest request)
+    {
+        return request.BatchId != null && request.BatchId.Length > 0 && request.BatchId.Length <= 80 && IsSafeId(request.BatchId) &&
+            request.ViewerId != null && request.ViewerId.Length > 0 && request.ViewerId.Length <= 80 && IsSafeId(request.ViewerId) &&
+            request.GiftId != null && request.GiftId.Length > 0 && request.GiftId.Length <= 80 && IsSafeId(request.GiftId) &&
+            !string.IsNullOrWhiteSpace(request.ViewerName) && request.ViewerName!.Length <= 80 &&
+            !string.IsNullOrWhiteSpace(request.GiftName) && request.GiftName!.Length <= 80 &&
+            request.GiftUnits > 0 && request.GiftUnits <= 10000;
+    }
+
+    private void OnCommandCompleted(string requestId, int requested, int created)
+    {
+        if (!_giftCommands.TryGetValue(requestId, out PendingGift? pending)) return;
+        _giftCommands.Remove(requestId);
+        BridgeRequest request = pending.Request;
+        if (created > 0)
+            _feed?.Notify(request.BatchId!, request.ViewerId!, request.ViewerName!,
+                request.GiftId!, request.GiftName!, request.GiftUnits, request.Type!, created);
+    }
+
+    private void OnBallCreated(string requestId, GameObject ball)
+    {
+        if (!_giftCommands.TryGetValue(requestId, out PendingGift? pending) ||
+            pending.Participant == null) return;
+        ball.AddComponent<PixelBallOwner>().Initialize(pending.Participant);
     }
 
     // External commands have no pointer. Find the closest visible open cell to
@@ -276,6 +316,9 @@ internal sealed class LocalSpawnBridge : IDisposable
     {
         _stopping = true;
         _listener?.Stop();
+        _spawner.CommandCompleted -= OnCommandCompleted;
+        _spawner.BallCreated -= OnBallCreated;
+        _giftCommands.Clear();
     }
 
     private sealed class Incoming
@@ -287,12 +330,26 @@ internal sealed class LocalSpawnBridge : IDisposable
         { Request = request; Responses = responses; Connection = connection; }
     }
 
+    private sealed class PendingGift
+    {
+        internal readonly BridgeRequest Request;
+        internal readonly PixelParticipant? Participant;
+        internal PendingGift(BridgeRequest request, PixelParticipant? participant)
+        { Request = request; Participant = participant; }
+    }
+
     [DataContract]
     private sealed class BridgeRequest
     {
         [DataMember(Name = "requestId")] public string? RequestId { get; set; }
         [DataMember(Name = "type")] public string? Type { get; set; }
         [DataMember(Name = "quantity")] public int Quantity { get; set; }
+        [DataMember(Name = "batchId", EmitDefaultValue = false)] public string? BatchId { get; set; }
+        [DataMember(Name = "viewerId", EmitDefaultValue = false)] public string? ViewerId { get; set; }
+        [DataMember(Name = "viewerName", EmitDefaultValue = false)] public string? ViewerName { get; set; }
+        [DataMember(Name = "giftId", EmitDefaultValue = false)] public string? GiftId { get; set; }
+        [DataMember(Name = "giftName", EmitDefaultValue = false)] public string? GiftName { get; set; }
+        [DataMember(Name = "giftUnits", EmitDefaultValue = false)] public int GiftUnits { get; set; }
     }
 
     [DataContract]
