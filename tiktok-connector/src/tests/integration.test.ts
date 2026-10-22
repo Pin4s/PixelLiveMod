@@ -1,0 +1,161 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { test } from 'node:test';
+import { BridgeClient, splitCommands } from '../bridge.js';
+import { normalizeUsername, validateConfig } from '../config.js';
+import { GiftResolver, parseCatalog, parseGiftEvent, type GiftEvent } from '../gifts.js';
+import { SequenceCounter } from '../sequence.js';
+
+const exampleConfigPath = new URL('../../config.example.json', import.meta.url);
+const exampleConfig = JSON.parse(readFileSync(exampleConfigPath, 'utf8'));
+const testEnv = { TIKTOK_USERNAME: '', PIXELLIVEMOD_BRIDGE_PORT: '19081' };
+const config = validateConfig(exampleConfig, false, testEnv);
+const catalog = config.gifts.map((g, index) => ({ id: String(index + 101), name: g.name, coins: g.coins }));
+const resolver = new GiftResolver(config.gifts, () => {});
+resolver.resolveCatalog(catalog);
+const event = (giftId: string, extra: Partial<GiftEvent> = {}): GiftEvent => ({
+  giftId, repeatCount: 1, repeatEnd: true, giftType: 0, userId: '42', msgId: '1000', ...extra,
+});
+
+test('all nine gift mappings and exact named distinctions', () => {
+  const expected = [
+    ['Orange', 1], ['Orange', 5], ['Yellow', 1], ['Yellow', 5],
+    ['Green', 1], ['Green', 5], ['Pink', 1], ['Pink', 5], ['Inferno', 1],
+  ];
+  for (let i = 0; i < expected.length; i++) {
+    const mapped = resolver.resolve(event(String(i + 101)));
+    assert.equal(mapped?.type, expected[i][0]);
+    assert.equal(mapped?.quantity, expected[i][1]);
+  }
+  assert.equal(config.gifts[0].name, 'Rose');
+  assert.equal(config.gifts[5].name, 'Rosa');
+  assert.equal(resolver.resolve(event('999')), null);
+});
+
+test('one Rose and five Roses map to one and five Orange balls', () => {
+  const rose = resolver.resolve(event('101'))!;
+  assert.deepEqual(splitCommands(rose.type, rose.quantity).map(c => c.quantity), [1]);
+  assert.deepEqual(splitCommands(rose.type, 5 * rose.quantity).map(c => c.quantity), [5]);
+});
+
+test('catalog cost mismatch and ambiguous names fail closed', () => {
+  const local = new GiftResolver(config.gifts, () => {});
+  local.resolveCatalog([{ id: '101', name: 'Rose', coins: 2 },
+    { id: '106', name: 'Rosa', coins: 10 }, { id: '206', name: 'Rosa', coins: 10 }]);
+  assert.equal(local.resolve(event('101')), null);
+  assert.equal(local.resolve(event('106')), null);
+});
+
+test('conservative fallback requires exact name and cost', () => {
+  const local = new GiftResolver(config.gifts, () => {});
+  local.resolveCatalog(null);
+  assert.equal(local.resolve(event('55', { name: 'Rose', coins: 1 }))?.type, 'Orange');
+  assert.equal(local.resolve(event('55', { name: 'Rosa', coins: 1 })), null);
+  assert.equal(local.resolve(event('55', { name: 'rose', coins: 1 })), null);
+});
+
+test('v3 gift event fields and room catalog fields are parsed', () => {
+  const parsed = parseGiftEvent({
+    giftId: '101', repeatCount: 3, repeatEnd: 0, groupId: '777',
+    common: { msgId: '9001' }, user: { id: '42' },
+    gift: { name: 'Rose', diamondCount: 1, type: 1 },
+  });
+  assert.deepEqual(parsed, {
+    giftId: '101', name: 'Rose', coins: 1, userId: '42', groupId: '777',
+    msgId: '9001', giftType: 1, repeatCount: 3, repeatEnd: false,
+  });
+  assert.deepEqual(parseCatalog([{ id: '101', name: 'Rose', diamond_count: 1 }]),
+    [{ id: '101', name: 'Rose', coins: 1 }]);
+});
+
+test('verified explicit ID tolerates translated catalog name but not wrong cost', () => {
+  const mappings = structuredClone(config.gifts);
+  mappings[0].giftId = '101';
+  const local = new GiftResolver(mappings, () => {});
+  local.resolveCatalog([{ id: '101', name: 'Rosa traduzida', coins: 1 }]);
+  assert.equal(local.resolve(event('101'))?.name, 'Rose');
+  local.resolveCatalog([{ id: '101', name: 'Rosa traduzida', coins: 10 }]);
+  assert.equal(local.resolve(event('101')), null);
+});
+
+test('cumulative streak 1..10 then final produces exactly ten units', () => {
+  const counter = new SequenceCounter(() => {});
+  let units = 0;
+  for (let i = 1; i <= 10; i++)
+    units += counter.count(event('101', { giftType: 1, groupId: '77', repeatCount: i, repeatEnd: false, msgId: String(1000 + i) }));
+  units += counter.count(event('101', { giftType: 1, groupId: '77', repeatCount: 10, repeatEnd: true, msgId: '2000' }));
+  assert.equal(units, 10);
+  assert.equal(counter.count(event('101', { giftType: 1, groupId: '77', repeatCount: 10, repeatEnd: true })), 0);
+  assert.equal(counter.count(event('101', { giftType: 1, groupId: '78', repeatCount: 1, repeatEnd: true })), 1);
+  assert.equal(counter.count(event('101', { giftType: 1, userId: '43', groupId: '77', repeatCount: 1, repeatEnd: true })), 1);
+});
+
+test('three Finger Hearts produce 15 balls; splitting respects 20 limit', () => {
+  const total = 3 * config.gifts[1].quantity;
+  assert.equal(total, 15);
+  assert.deepEqual(splitCommands('Orange', total).map(c => c.quantity), [15]);
+  assert.deepEqual(splitCommands('Orange', 55).map(c => c.quantity), [20, 20, 15]);
+  assert.throws(() => splitCommands('Orange', 0));
+});
+
+test('final-only fallback and duplicate individual message', () => {
+  const counter = new SequenceCounter(() => {});
+  assert.equal(counter.count(event('101', { giftType: 1, groupId: undefined, repeatCount: 2, repeatEnd: false })), 0);
+  assert.equal(counter.count(event('101', { giftType: 1, groupId: undefined, repeatCount: 2, repeatEnd: true })), 2);
+  assert.equal(counter.count(event('101', { giftType: 1, groupId: undefined, repeatCount: 2, repeatEnd: true })), 0);
+  assert.equal(counter.count(event('101', { msgId: '222' })), 1);
+  assert.equal(counter.count(event('101', { msgId: '222' })), 0);
+});
+
+test('missing gift type does not sum cumulative updates', () => {
+  const counter = new SequenceCounter(() => {});
+  assert.equal(counter.count(event('101', { giftType: undefined, groupId: undefined, repeatCount: 1, repeatEnd: false, msgId: '311' })), 0);
+  assert.equal(counter.count(event('101', { giftType: undefined, groupId: undefined, repeatCount: 2, repeatEnd: false, msgId: '312' })), 0);
+  assert.equal(counter.count(event('101', { giftType: undefined, groupId: undefined, repeatCount: 2, repeatEnd: true, msgId: '313' })), 2);
+});
+
+test('configuration rejects duplicate gifts and invalid quantity; @ normalized', () => {
+  assert.equal(normalizeUsername('@viewer'), 'viewer');
+  assert.equal(normalizeUsername('viewer'), 'viewer');
+  const bad = structuredClone(config);
+  bad.gifts[0].quantity = 0;
+  assert.throws(() => validateConfig(bad, false, testEnv), /quantity/);
+});
+
+test('personal and local values come from environment, not gift config', () => {
+  const withLegacyValues = { ...exampleConfig, tiktokUsername: 'old-user', bridgePort: 12345 };
+  const loaded = validateConfig(withLegacyValues, true,
+    { TIKTOK_USERNAME: '@live.user', PIXELLIVEMOD_BRIDGE_PORT: '19082' });
+  assert.equal(loaded.tiktokUsername, 'live.user');
+  assert.equal(loaded.bridgePort, 19082);
+  assert.throws(() => validateConfig(exampleConfig, true,
+    { PIXELLIVEMOD_BRIDGE_PORT: '19081' }), /TIKTOK_USERNAME/);
+  assert.throws(() => validateConfig(exampleConfig, true,
+    { TIKTOK_USERNAME: 'live.user', PIXELLIVEMOD_BRIDGE_PORT: 'invalid' }), /PIXELLIVEMOD_BRIDGE_PORT/);
+});
+
+test('JSON-line bridge receives a command and distinguishes queued acknowledgment', async () => {
+  let received: Record<string, unknown> | null = null;
+  const server = createServer(socket => {
+    let buffer = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (data: string) => {
+      buffer += data;
+      const end = buffer.indexOf('\n');
+      if (end < 0) return;
+      received = JSON.parse(buffer.slice(0, end)) as Record<string, unknown>;
+      socket.write(JSON.stringify({ requestId: received.requestId, accepted: true, reason: 'queued, not yet created' }) + '\n');
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No local test port');
+  const bridge = new BridgeClient(address.port, () => {});
+  bridge.start();
+  const accepted = await bridge.submit({ requestId: 'test-123', type: 'Pink', quantity: 5 });
+  assert.equal(accepted, true);
+  assert.deepEqual(received, { requestId: 'test-123', type: 'Pink', quantity: 5 });
+  bridge.stop();
+  await new Promise<void>(resolve => server.close(() => resolve()));
+});

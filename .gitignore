@@ -1,0 +1,52 @@
+# Local build output and IDE state
+bin/
+obj/
+dist/
+node_modules/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.pdb
+*.cache
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+
+# Game, Unity and BepInEx files belong to a local installation
+PixelLiveMod-10MillionPixels-Isolated/
+10 Million Pixels Demo*/
+*_Data/
+BepInEx/
+*.dll
+*.exe
+*.assets
+*.bundle
+*.resS
+*.resource
+*.unity3d
+save/
+saves/
+*.sav
+*.save
+
+# Logs and local diagnostics
+*.log
+evidence/
+
+# Local configuration and credentials
+tiktok-connector/config.json
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+*.key
+*.cookie
+cookies*.json
+credentials*.json
+secrets*.json
+.npmrc

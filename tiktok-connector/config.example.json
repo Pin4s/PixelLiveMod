@@ -1,0 +1,13 @@
+{
+  "gifts": [
+    { "name": "Rose", "coins": 1, "type": "Orange", "quantity": 1 },
+    { "name": "Finger Heart", "coins": 5, "type": "Orange", "quantity": 5 },
+    { "name": "TikTok", "coins": 1, "type": "Yellow", "quantity": 1 },
+    { "name": "Perfume", "coins": 20, "type": "Yellow", "quantity": 5 },
+    { "name": "GG", "coins": 1, "type": "Green", "quantity": 1 },
+    { "name": "Rosa", "coins": 10, "type": "Green", "quantity": 5 },
+    { "name": "Heart Me", "coins": 1, "type": "Pink", "quantity": 1 },
+    { "name": "Doughnut", "coins": 30, "type": "Pink", "quantity": 5 },
+    { "name": "Hand Heart", "coins": 100, "type": "Inferno", "quantity": 1 }
+  ]
+}

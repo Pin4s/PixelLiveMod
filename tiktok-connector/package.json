@@ -1,0 +1,19 @@
+{
+  "name": "pixellivemod-tiktok-connector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/tests/*.test.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "18.0.8",
+    "tiktok-live-connector": "2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.18",
+    "typescript": "^5.9.3"
+  }
+}
