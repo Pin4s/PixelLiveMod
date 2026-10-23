@@ -15,6 +15,8 @@ public sealed class PixelLiveMod : BaseUnityPlugin
     private PixelLeaderboardService? _leaderboard;
     private PixelDestructionTracker? _destructionTracker;
     private GoldenPixelCollisionPatch? _goldenPixelCollision;
+    private EndingDiagnostics? _endingDiagnostics;
+    private AutoRestartAfterVictory? _autoRestart;
     private InfernoSettings? _infernoSettings;
     private ConfigEntry<int>? _infernoQuantity;
     private float _nextInfernoAllowedAt;
@@ -45,6 +47,13 @@ public sealed class PixelLiveMod : BaseUnityPlugin
         _spawner = new BallSpawnService(this, Logger);
         _goldenPixelCollision = new GoldenPixelCollisionPatch(Logger);
         _goldenPixelCollision.Install();
+        bool endingDiagnosticsEnabled = Config.Bind("EndingDiagnostics", "EndingDiagnosticsEnabled", false,
+            "Log ending animation changes and capture an ending-state snapshot with F10. Restart required.").Value;
+        if (endingDiagnosticsEnabled)
+        {
+            _endingDiagnostics = gameObject.AddComponent<EndingDiagnostics>();
+            _endingDiagnostics.Configure(Logger);
+        }
         bool feedEnabled = Config.Bind("GiftFeed", "GiftFeedEnabled", true,
             "Show a small in-game feed for confirmed TikTok gift spawns.").Value;
         float feedDuration = Config.Bind("GiftFeed", "GiftFeedDuration", 5f,
@@ -96,6 +105,13 @@ public sealed class PixelLiveMod : BaseUnityPlugin
                 _giftFeed, _leaderboard);
             _bridge.Start();
         }
+        bool autoRestart = Config.Bind("Ending", "AutoRestartAfterVictory", false,
+            "After native victory reaches the opaque Golden Pixel Stats Screen, archive the save and start a new world automatically. Restart required.").Value;
+        _autoRestart = new AutoRestartAfterVictory(Logger, _spawner, _bridge,
+            _goldenPixelCollision, _leaderboard, transform, autoRestart);
+        _autoRestart.Install();
+        if (_bridge != null)
+            _bridge.GalaxyResetRequested = viewer => _autoRestart?.TryBeginGalaxy(viewer) == true;
         Logger.LogInfo("PixelLiveMod initialized successfully (0.7.0)");
         Logger.LogInfo($"Game data path: {Application.dataPath}");
         Logger.LogInfo($"Plugin assembly path: {typeof(PixelLiveMod).Assembly.Location}");
@@ -139,6 +155,11 @@ public sealed class PixelLiveMod : BaseUnityPlugin
             }
             if (!ctrl && !alt && !shift && Input.GetKeyDown(KeyCode.F9))
                 HandleInfernoHotkey();
+            if (!ctrl && !alt && !shift && Input.GetKeyDown(KeyCode.F11))
+            {
+                bool started = _autoRestart?.TryBeginGalaxy(null) == true;
+                Logger.LogInfo($"Hotkey F11: Galaxy reset {(started ? "started" : "rejected; round not playable or reset in progress")}");
+            }
 
             foreach (HotkeyBinding binding in _hotkeys)
             {
@@ -179,6 +200,7 @@ public sealed class PixelLiveMod : BaseUnityPlugin
 
         try
         {
+            _autoRestart?.Update();
             _bridge?.ProcessMainThread();
             _spawner?.ProcessFrame();
         }
@@ -193,6 +215,7 @@ public sealed class PixelLiveMod : BaseUnityPlugin
     private void OnDestroy()
     {
         _bridge?.Dispose();
+        _autoRestart?.Dispose();
         _destructionTracker?.Dispose();
         _goldenPixelCollision?.Dispose();
     }

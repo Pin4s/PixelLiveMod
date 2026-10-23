@@ -20,6 +20,7 @@ public sealed class BallSpawnService
     private readonly Queue<SpawnRequest> _queue = new Queue<SpawnRequest>();
     private int _queuedBalls;
     private int _nextRequestId;
+    private bool _blocked;
     public event Action<string, int, int>? CommandCompleted;
     public event Action<string, GameObject>? BallCreated;
 
@@ -50,6 +51,8 @@ public sealed class BallSpawnService
             _log.LogError($"Spawn command rejected: {typeName} x{quantity}; must be called on Unity main thread");
             return false;
         }
+
+        if (_blocked) return false;
 
         if (!IsSupportedColor(color))
         {
@@ -93,6 +96,7 @@ public sealed class BallSpawnService
 
     public void ProcessFrame()
     {
+        if (_blocked) return;
         if (_queue.Count == 0)
             return;
 
@@ -147,6 +151,25 @@ public sealed class BallSpawnService
                 FinishRequest(request);
         }
     }
+
+    // The plugin and this queue both live across Unity scene loads. Never carry
+    // accepted requests from a completed round into the next world.
+    internal void BlockAndCancelPending()
+    {
+        _blocked = true;
+        while (_queue.Count > 0)
+        {
+            SpawnRequest request = _queue.Dequeue();
+            if (request.CorrelationId != null)
+            {
+                try { CommandCompleted?.Invoke(request.CorrelationId, request.Requested, 0); }
+                catch (Exception error) { _log.LogError($"Spawn cancellation observer failed: {error}"); }
+            }
+        }
+        _queuedBalls = 0;
+    }
+
+    internal void Resume() => _blocked = false;
 
     private void FailRemaining(SpawnRequest request, string reason)
     {

@@ -20,7 +20,7 @@ const event = (giftId: string, extra: Partial<GiftEvent> = {}): GiftEvent => ({
   giftId, repeatCount: 1, repeatEnd: true, giftType: 0, userId: '42', msgId: '1000', ...extra,
 });
 
-test('all nine gift mappings and exact named distinctions', () => {
+test('nine ball mappings retain their types and Galaxy is a separate action', () => {
   const expected = [
     ['Orange', 1], ['Orange', 5], ['Yellow', 1], ['Yellow', 5],
     ['Green', 1], ['Green', 5], ['Pink', 1], ['Pink', 5], ['Inferno', 1],
@@ -32,13 +32,29 @@ test('all nine gift mappings and exact named distinctions', () => {
   }
   assert.equal(config.gifts[0].name, 'Rose');
   assert.equal(config.gifts[5].name, 'Rosa');
+  assert.equal(resolver.resolve(event('110'))?.type, 'Galaxy');
   assert.equal(resolver.resolve(event('999')), null);
 });
 
 test('one Rose and five Roses map to one and five Orange balls', () => {
   const rose = resolver.resolve(event('101'))!;
+  if (rose.type === 'Galaxy') throw new Error('Rose unexpectedly became an action');
   assert.deepEqual(splitCommands(rose.type, rose.quantity).map(c => c.quantity), [1]);
   assert.deepEqual(splitCommands(rose.type, 5 * rose.quantity).map(c => c.quantity), [5]);
+});
+
+test('Galaxy and Galáxia resolve only with the verified catalog cost', () => {
+  const galaxy = config.gifts[9];
+  const local = new GiftResolver(config.gifts, () => {});
+  local.resolveCatalog([{ id: '900', name: 'Galáxia', coins: 1000 }]);
+  assert.equal(local.resolve(event('900'))?.type, 'Galaxy');
+  local.resolveCatalog([{ id: '900', name: 'Galaxy', coins: 999 }]);
+  assert.equal(local.resolve(event('900')), null);
+  local.resolveCatalog(null);
+  assert.equal(local.resolve(event('900', { name: 'Galaxy', coins: 1000 }))?.type, 'Galaxy');
+  assert.equal(local.resolve(event('900', { name: 'Galáxia', coins: 1000 }))?.type, 'Galaxy');
+  assert.equal(local.resolve(event('900', { name: 'Galaxy', coins: 999 })), null);
+  assert.equal(galaxy.quantity, 1);
 });
 
 test('catalog cost mismatch and ambiguous names fail closed', () => {
@@ -213,4 +229,58 @@ test('JSON-line bridge receives a command and distinguishes queued acknowledgmen
   assert.deepEqual(received, { requestId: 'test-123', type: 'Pink', quantity: 5 });
   bridge.stop();
   await new Promise<void>(resolve => server.close(() => resolve()));
+});
+
+test('bridge keeps the same gift command pending while Unity restarts the round', async () => {
+  const ids: string[] = [];
+  const server = createServer(socket => {
+    socket.setEncoding('utf8');
+    socket.on('data', (data: string) => {
+      for (const line of data.trim().split('\n')) {
+        const command = JSON.parse(line) as { requestId: string };
+        ids.push(command.requestId);
+        socket.write(JSON.stringify({ requestId: command.requestId,
+          accepted: ids.length > 1,
+          reason: ids.length > 1 ? 'queued, not yet created' : 'round restarting; retry' }) + '\n');
+      }
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No local test port');
+  const bridge = new BridgeClient(address.port, () => {});
+  try {
+    bridge.start();
+    assert.equal(await bridge.submit({ requestId: 'transition-123', type: 'Green', quantity: 2 }), true);
+    assert.deepEqual(ids, ['transition-123', 'transition-123']);
+  } finally {
+    bridge.stop();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test('Galaxy is sent as a special action without ball type or quantity', async () => {
+  let received: Record<string, unknown> | null = null;
+  const server = createServer(socket => {
+    socket.setEncoding('utf8');
+    socket.on('data', (data: string) => {
+      received = JSON.parse(data.trim()) as Record<string, unknown>;
+      socket.write(JSON.stringify({ requestId: received.requestId,
+        accepted: true, reason: 'galaxy effect started' }) + '\n');
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No local test port');
+  const bridge = new BridgeClient(address.port, () => {});
+  try {
+    bridge.start();
+    assert.equal(await bridge.submit({ requestId: 'galaxy-1', action: 'GalaxyReset',
+      viewerId: '42', viewerName: 'pixel_viewer' }), true);
+    assert.deepEqual(received, { requestId: 'galaxy-1', action: 'GalaxyReset',
+      viewerId: '42', viewerName: 'pixel_viewer' });
+  } finally {
+    bridge.stop();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });

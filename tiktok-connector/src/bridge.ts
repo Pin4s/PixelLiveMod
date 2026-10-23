@@ -7,7 +7,9 @@ export interface GiftMetadata {
   giftId: string; giftName: string; giftUnits: number;
 }
 export interface SpawnCommand extends Partial<GiftMetadata> { requestId: string; type: BallType; quantity: number; }
-interface Pending { command: SpawnCommand; resolve: (accepted: boolean) => void; }
+export interface GalaxyCommand extends Partial<GiftMetadata> { requestId: string; action: 'GalaxyReset'; }
+export type BridgeCommand = SpawnCommand | GalaxyCommand;
+interface Pending { command: BridgeCommand; resolve: (accepted: boolean) => void; }
 
 export function splitCommands(type: BallType, total: number, gift?: GiftMetadata): SpawnCommand[] {
   if (!Number.isSafeInteger(total) || total < 1 || total > 10000)
@@ -25,14 +27,15 @@ export class BridgeClient {
   private readonly queue: Pending[] = [];
   private active: Pending | null = null;
   private timeout: NodeJS.Timeout | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
   private stopped = false;
   constructor(private readonly port: number, private readonly log: (message: string) => void) {}
 
   start(): void { this.connect(); }
 
-  submit(command: SpawnCommand): Promise<boolean> {
+  submit(command: BridgeCommand): Promise<boolean> {
     if (this.queue.length + (this.active ? 1 : 0) >= 256) {
-      this.log(`[Bridge] Queue full: rejected ${command.type} x${command.quantity} (${command.requestId})`);
+      this.log(`[Bridge] Queue full: rejected ${'action' in command ? command.action : `${command.type} x${command.quantity}`} (${command.requestId})`);
       return Promise.resolve(false);
     }
     return new Promise(resolve => {
@@ -74,11 +77,11 @@ export class BridgeClient {
   }
 
   private pump(): void {
-    if (this.stopped || this.active || !this.socket || this.queue.length === 0) return;
+    if (this.stopped || this.active || this.retryTimer || !this.socket || this.queue.length === 0) return;
     this.active = this.queue.shift()!;
     const command = this.active.command;
     this.socket.write(JSON.stringify(command) + '\n');
-    this.log(`[Bridge] Command sent: ${command.type} x${command.quantity}, requestId=${command.requestId}`);
+    this.log(`[Bridge] Command sent: ${'action' in command ? command.action : `${command.type} x${command.quantity}`}, requestId=${command.requestId}`);
     this.timeout = setTimeout(() => {
       this.log(`[Bridge] Acknowledgment timeout for ${command.requestId}; outcome unknown, NOT retrying`);
       this.socket?.destroy();
@@ -101,7 +104,18 @@ export class BridgeClient {
         }
         if (this.timeout) clearTimeout(this.timeout);
         this.timeout = null;
-        this.log(`[Unity] Command ${reply.accepted ? 'accepted into spawn queue' : 'rejected'}: ${this.active.command.type} x${this.active.command.quantity}; ${reply.reason ?? ''}`);
+        if (reply.accepted === false && reply.reason === 'round restarting; retry') {
+          const pending = this.active;
+          this.active = null;
+          this.queue.unshift(pending);
+          this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            this.pump();
+          }, 1000);
+          continue;
+        }
+        const command = this.active.command;
+        this.log(`[Unity] Command ${reply.accepted ? 'accepted' : 'rejected'}: ${'action' in command ? command.action : `${command.type} x${command.quantity}`}; ${reply.reason ?? ''}`);
         this.active.resolve(reply.accepted === true);
         this.active = null;
         this.pump();
@@ -116,6 +130,7 @@ export class BridgeClient {
     this.socket?.destroy();
     this.socket = null;
     if (this.timeout) clearTimeout(this.timeout);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.active) this.active.resolve(false);
     for (const item of this.queue) item.resolve(false);
     this.active = null;

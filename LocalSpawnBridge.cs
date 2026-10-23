@@ -31,6 +31,9 @@ internal sealed class LocalSpawnBridge : IDisposable
     private volatile bool _stopping;
     private int _pendingCount;
     private int _connectionNumber;
+    private int _roundEpoch;
+    private bool _transitioning;
+    internal Func<string?, bool>? GalaxyResetRequested;
 
     internal LocalSpawnBridge(int port, BallSpawnService spawner,
         Func<InfernoSettings> infernoSettings, ManualLogSource log, LiveGiftFeed? feed = null,
@@ -133,7 +136,8 @@ internal sealed class LocalSpawnBridge : IDisposable
                         responses.Enqueue(new BridgeResponse(request.RequestId ?? "", false, "bridge queue full"));
                         _log.LogWarning("[Bridge] Command rejected: bridge queue full");
                     }
-                    else _incoming.Enqueue(new Incoming(request, responses, connection));
+                    else _incoming.Enqueue(new Incoming(request, responses, connection,
+                        Volatile.Read(ref _roundEpoch)));
                 }
                 else if (line.Count >= 2048)
                 {
@@ -156,8 +160,14 @@ internal sealed class LocalSpawnBridge : IDisposable
             BridgeResponse response;
             if (item.Connection != _connectionNumber)
                 response = new BridgeResponse(id, false, "stale connection");
+            else if (item.RoundEpoch != Volatile.Read(ref _roundEpoch))
+                response = new BridgeResponse(id, false, "previous round; not spawned");
             else if (id.Length < 1 || id.Length > 80 || !IsSafeId(id))
                 response = new BridgeResponse(id, false, "invalid requestId");
+            else if (_transitioning && request.Action == "GalaxyReset")
+                response = new BridgeResponse(id, false, "galaxy reset already in progress");
+            else if (_transitioning)
+                response = new BridgeResponse(id, false, "round restarting; retry");
             else if (!_seen.Add(id))
                 response = new BridgeResponse(id, false, "duplicate requestId");
             else
@@ -167,13 +177,30 @@ internal sealed class LocalSpawnBridge : IDisposable
                 response = Execute(request);
             }
             item.Responses.Enqueue(response);
-            _log.LogInfo($"[Bridge] Command {id}: {(response.Accepted ? "accepted into spawn queue" : "rejected")}; {response.Reason}");
+            _log.LogInfo($"[Bridge] Command {id}: {(response.Accepted ? "accepted" : "rejected")}; {response.Reason}");
         }
     }
+
+    internal void BeginRoundTransition()
+    {
+        _transitioning = true;
+        Interlocked.Increment(ref _roundEpoch);
+        _giftCommands.Clear();
+    }
+
+    internal void FinishRoundTransition() => _transitioning = false;
 
     private BridgeResponse Execute(BridgeRequest request)
     {
         string id = request.RequestId ?? "";
+        if (request.Action != null)
+        {
+            if (request.Action != "GalaxyReset" || request.Type != null || request.Quantity != 0)
+                return new BridgeResponse(id, false, "invalid special action");
+            bool started = GalaxyResetRequested?.Invoke(request.ViewerName) == true;
+            return new BridgeResponse(id, started,
+                started ? "galaxy effect started" : "galaxy reset unavailable or round not playable");
+        }
         if (request.Quantity < 1 || request.Quantity > BallSpawnService.MaxBallsPerCommand)
             return new BridgeResponse(id, false, "quantity must be 1..20");
         if (request.Type != "Orange" && request.Type != "Yellow" &&
@@ -326,8 +353,10 @@ internal sealed class LocalSpawnBridge : IDisposable
         internal readonly BridgeRequest Request;
         internal readonly ConcurrentQueue<BridgeResponse> Responses;
         internal readonly int Connection;
-        internal Incoming(BridgeRequest request, ConcurrentQueue<BridgeResponse> responses, int connection)
-        { Request = request; Responses = responses; Connection = connection; }
+        internal readonly int RoundEpoch;
+        internal Incoming(BridgeRequest request, ConcurrentQueue<BridgeResponse> responses,
+            int connection, int roundEpoch)
+        { Request = request; Responses = responses; Connection = connection; RoundEpoch = roundEpoch; }
     }
 
     private sealed class PendingGift
@@ -342,6 +371,7 @@ internal sealed class LocalSpawnBridge : IDisposable
     private sealed class BridgeRequest
     {
         [DataMember(Name = "requestId")] public string? RequestId { get; set; }
+        [DataMember(Name = "action", EmitDefaultValue = false)] public string? Action { get; set; }
         [DataMember(Name = "type")] public string? Type { get; set; }
         [DataMember(Name = "quantity")] public int Quantity { get; set; }
         [DataMember(Name = "batchId", EmitDefaultValue = false)] public string? BatchId { get; set; }

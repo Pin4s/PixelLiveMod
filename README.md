@@ -86,6 +86,8 @@ As hotkeys usam a posição atual do mouse no mundo do jogo. As quantidades fica
 | Shift+F8 | `Shift_F8_Pink_Quantity` | Pink | 5 |
 | F9 | `F9_Inferno_Quantity` | Inferno | 1 |
 
+`F11` ativa localmente o Galaxy Reset pela mesma sequência do presente Galaxy. Não cria bola e não usa a posição do mouse. F10 continua reservado ao diagnóstico de encerramento.
+
 `Shift+F9` não tem ação. Ctrl e Alt não são aceitos junto das hotkeys. A Inferno Ball tem parâmetros próprios documentados em [INFERNO.md](INFERNO.md).
 
 ## Limitações conhecidas

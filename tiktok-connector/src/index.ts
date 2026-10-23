@@ -62,16 +62,23 @@ async function main(): Promise<void> {
       const units = counter.count(event);
       if (units === 0) return;
       log(`[TikTok] Gift received: ${mapping.name}, units=${units}, group=${event.groupId ?? '<none>'}`);
-      const total = units * mapping.quantity;
-      log(`[TikTok] Mapped: ${mapping.type} x${total}`);
-      let commands;
       const gift = event.userId && event.viewerName ? {
         batchId: randomUUID(), viewerId: event.userId,
         viewerName: event.viewerName.trim().slice(0, 80),
         giftId: event.giftId, giftName: mapping.name,
         giftUnits: units,
       } : undefined;
+      if (mapping.type === 'Galaxy') {
+        const command = { requestId: randomUUID(), action: 'GalaxyReset' as const, ...gift };
+        void bridge.submit(command).then(accepted => {
+          if (!accepted) log(`[TikTok] Galaxy reset not accepted: requestId=${command.requestId}`);
+        });
+        return;
+      }
+      const total = units * mapping.quantity;
+      log(`[TikTok] Mapped: ${mapping.type} x${total}`);
       if (!gift) log('[TikTok] Stable viewer ID or public name unavailable; spawning without feed metadata');
+      let commands;
       try { commands = splitCommands(mapping.type, total, gift); }
       catch (error) { log(`[TikTok] Gift rejected: ${String(error)}`); return; }
       void (async () => {

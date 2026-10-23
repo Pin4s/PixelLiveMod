@@ -88,13 +88,15 @@ export class GiftResolver {
     this.catalogAvailable = catalog !== null;
     if (!catalog) { this.log('[TikTok] Gift catalog unavailable; conservative event-metadata fallback enabled'); return; }
     for (const mapping of this.mappings) {
-      const candidates = catalog.filter(g => mapping.giftId ? g.id === mapping.giftId : g.name === mapping.name);
+      const candidates = catalog.filter(g => mapping.giftId ? g.id === mapping.giftId :
+        (g.name === mapping.name || (mapping.name === 'Galaxy' && g.name === 'Galáxia')));
       if (candidates.length !== 1) {
         this.log(`[TikTok] Gift ${mapping.name}: ${candidates.length ? 'ambiguous' : 'not found'} in catalog; disabled`);
         continue;
       }
       const candidate = candidates[0];
-      if ((!mapping.giftId && candidate.name !== mapping.name) ||
+      if ((!mapping.giftId && candidate.name !== mapping.name &&
+          !(mapping.name === 'Galaxy' && candidate.name === 'Galáxia')) ||
           candidate.coins === null || candidate.coins !== mapping.coins) {
         this.log(`[TikTok] Gift ${mapping.name}: catalog name/cost mismatch (name=${candidate.name}, coins=${candidate.coins}); disabled`);
         continue;
@@ -113,7 +115,8 @@ export class GiftResolver {
   resolve(event: GiftEvent): GiftMapping | null {
     if (this.catalogAvailable) return this.byId.get(event.giftId) ?? null;
     // No catalog: require exact name AND cost. Similar/translated names fail closed.
-    const matches = this.mappings.filter(g => g.name === event.name && g.coins === event.coins &&
+    const matches = this.mappings.filter(g =>
+      (g.name === event.name || (g.name === 'Galaxy' && event.name === 'Galáxia')) && g.coins === event.coins &&
       (g.giftId === undefined || g.giftId === event.giftId));
     return matches.length === 1 ? matches[0] : null;
   }

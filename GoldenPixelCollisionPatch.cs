@@ -14,6 +14,7 @@ internal sealed class GoldenPixelCollisionPatch : IDisposable
     private readonly ManualLogSource _log;
     private FieldInfo? _completionEvent;
     private bool _installed;
+    private bool _held;
 
     internal GoldenPixelCollisionPatch(ManualLogSource log) { _log = log; }
 
@@ -58,6 +59,7 @@ internal sealed class GoldenPixelCollisionPatch : IDisposable
         __state = default;
         try
         {
+            if (_active == null || _active._held) return;
             if (__instance.GetComponent<Ball>() == null || __0.gameObject == null ||
                 !__0.gameObject.CompareTag("Tile")) return;
             PhysicsTile target = __0.gameObject.GetComponent<PhysicsTile>();
@@ -86,7 +88,7 @@ internal sealed class GoldenPixelCollisionPatch : IDisposable
     private static void CollisionPostfix(Contact __state)
     {
         GoldenPixelCollisionPatch? patch = _active;
-        if (patch == null || __state.World == null || __state.Tiles == null ||
+        if (patch == null || patch._held || __state.World == null || __state.Tiles == null ||
             EndingManager.ending || !ReferenceEquals(__state.World, WorldManager.Instance) ||
             !ReferenceEquals(__state.Tiles, __state.World.worldTiles)) return;
         if (!patch._gate.TryClaim()) return;
@@ -135,7 +137,18 @@ internal sealed class GoldenPixelCollisionPatch : IDisposable
         return false;
     }
 
-    private void OnSceneLoaded(Scene scene, LoadSceneMode mode) => _gate.NewRound();
+    internal void Hold() => _held = true;
+
+    internal void ResumeNewRound()
+    {
+        _gate.NewRound();
+        _held = false;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (!_held) _gate.NewRound();
+    }
 
     public void Dispose()
     {

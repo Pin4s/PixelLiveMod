@@ -8,6 +8,7 @@
     { "name": "Rosa", "coins": 10, "type": "Green", "quantity": 5 },
     { "name": "Heart Me", "coins": 1, "type": "Pink", "quantity": 1 },
     { "name": "Doughnut", "coins": 30, "type": "Pink", "quantity": 5 },
-    { "name": "Hand Heart", "coins": 100, "type": "Inferno", "quantity": 1 }
+    { "name": "Hand Heart", "coins": 100, "type": "Inferno", "quantity": 1 },
+    { "name": "Galaxy", "coins": 1000, "type": "Galaxy", "quantity": 1 }
   ]
 }
