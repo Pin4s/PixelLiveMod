@@ -22,6 +22,14 @@ O plugin usa C# e .NET Standard 2.1 com BepInEx 5.4.23.5 e assemblies Unity da c
 
 ## Pré-requisitos e instalação do jogo
 
+### Instalação automática no Windows
+
+Execute `Setup-PixelLiveMod.cmd` na raiz do repositório e informe a pasta que contém `10 Million Pixels Demo.exe` quando solicitado. O script usa uma cópia isolada em `%TEMP%\PixelLiveMod-10MillionPixels-Isolated`; não altera a instalação original. Ele obtém .NET SDK e Node.js LTS localmente se faltarem, baixa o BepInEx 5.4.23.5 do release oficial, instala os pacotes npm, compila o plugin e o conector, copia a DLL para `BepInEx/plugins` e abre o jogo modificado. O jogo deve estar fechado durante a instalação. O jogo em si não é distribuído pelo repositório e precisa estar instalado legitimamente no PC.
+
+O instalador cria `.env` e `tiktok-connector/config.json` a partir dos exemplos somente se esses arquivos ainda não existirem. Para ativar a conexão TikTok, configure `TIKTOK_USERNAME` em `.env` e execute `Start-TikTok-Connector.cmd` na raiz do repositório; esse iniciador também encontra o Node.js instalado localmente pelo setup. Para preparar sem abrir o jogo, use `powershell -ExecutionPolicy Bypass -File .\Setup-PixelLiveMod.ps1 -GamePath 'C:\caminho\do\jogo' -NoLaunch`. O parâmetro `-DryRun` valida os caminhos sem baixar nem alterar arquivos.
+
+### Instalação manual
+
 1. No Windows, tenha uma cópia legítima de **10 Million Pixels Demo** (Unity Mono), o .NET SDK capaz de compilar `netstandard2.1` e Node.js 20+ com npm.
 2. Prepare uma cópia local do jogo fora deste repositório. O caminho padrão usado pelo projeto é `%TEMP%\PixelLiveMod-10MillionPixels-Isolated`. Manter a cópia separada evita alterar os arquivos da instalação Steam.
 3. Instale o BepInEx **5.4.23.5**, na distribuição compatível com a arquitetura do jogo: extraia os arquivos na raiz dessa cópia, junto de `10 Million Pixels Demo.exe`, e execute o jogo uma vez para gerar `BepInEx/config` e `BepInEx/plugins`.
