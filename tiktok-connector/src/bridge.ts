@@ -6,7 +6,8 @@ export interface GiftMetadata {
   batchId: string; viewerId: string; viewerName: string;
   giftId: string; giftName: string; giftUnits: number;
 }
-export interface SpawnCommand extends Partial<GiftMetadata> { requestId: string; type: BallType; quantity: number; }
+export interface RewardMetadata { source?: 'gift' | 'follow' | 'likes'; milestone?: number; }
+export interface SpawnCommand extends Partial<GiftMetadata>, RewardMetadata { requestId: string; type: BallType; quantity: number; }
 export interface GalaxyCommand extends Partial<GiftMetadata> { requestId: string; action: 'GalaxyReset'; }
 export type BridgeCommand = SpawnCommand | GalaxyCommand;
 interface Pending { command: BridgeCommand; resolve: (accepted: boolean) => void; }
@@ -104,7 +105,8 @@ export class BridgeClient {
         }
         if (this.timeout) clearTimeout(this.timeout);
         this.timeout = null;
-        if (reply.accepted === false && reply.reason === 'round restarting; retry') {
+        if (reply.accepted === false && (reply.reason === 'round restarting; retry' ||
+          reply.reason === 'previous round; not spawned' || reply.reason === 'stale connection')) {
           const pending = this.active;
           this.active = null;
           this.queue.unshift(pending);

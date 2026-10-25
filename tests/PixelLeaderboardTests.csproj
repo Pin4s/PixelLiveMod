@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="..\PixelLeaderboardService.cs" Link="PixelLeaderboardService.cs" />
     <Compile Include="..\PixelLeaderboardFormat.cs" Link="PixelLeaderboardFormat.cs" />
+    <Compile Include="..\BridgeSourcePolicy.cs" Link="BridgeSourcePolicy.cs" />
     <Compile Include="PixelLeaderboardTests.cs" />
   </ItemGroup>
 </Project>

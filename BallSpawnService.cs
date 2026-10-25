@@ -22,6 +22,7 @@ public sealed class BallSpawnService
     private int _nextRequestId;
     private bool _blocked;
     public event Action<string, int, int>? CommandCompleted;
+    public event Action<string, int, int>? CommandCancelled;
     public event Action<string, GameObject>? BallCreated;
 
     public BallSpawnService(MonoBehaviour host, ManualLogSource log)
@@ -162,7 +163,7 @@ public sealed class BallSpawnService
             SpawnRequest request = _queue.Dequeue();
             if (request.CorrelationId != null)
             {
-                try { CommandCompleted?.Invoke(request.CorrelationId, request.Requested, 0); }
+                try { CommandCancelled?.Invoke(request.CorrelationId, request.Requested, request.Created); }
                 catch (Exception error) { _log.LogError($"Spawn cancellation observer failed: {error}"); }
             }
         }

@@ -44,6 +44,20 @@ internal sealed class LiveGiftFeed : MonoBehaviour
         _canvas!.enabled = true;
     }
 
+    internal void NotifyReward(string batchId, string source, string viewerId,
+        string viewerName, int milestone, string ballType, int created)
+    {
+        if (_state == null || created <= 0) return;
+        string key = source == "likes" ? "likes:" + milestone : "follow";
+        GiftFeedState.Entry? entry = _state.Apply(batchId, viewerId, viewerName,
+            key, key, 1, ballType, created, Time.unscaledTime);
+        if (entry == null) return;
+        EnsureCanvas();
+        Reconcile();
+        if (_views.TryGetValue(entry, out TextMeshProUGUI? label)) label.text = Format(entry);
+        _canvas!.enabled = true;
+    }
+
     private void Update()
     {
         if (_state == null || _state.Entries.Count == 0) return;
@@ -130,8 +144,12 @@ internal sealed class LiveGiftFeed : MonoBehaviour
             entry.BallType == "Yellow" ? "#E7D58A" :
             entry.BallType == "Green" ? "#9BCB99" :
             entry.BallType == "Pink" ? "#C9A2D7" : "#E19779";
-        return $"<color=#A8CCD0>{Escape(entry.ViewerName)}</color> enviou {entry.Gifts} {Escape(gift)}\n" +
-            $"> Invocou {entry.Balls} <color={ballColor}>{ball}</color>";
+        string heading = entry.GiftId == "follow" ?
+            $"<color=#A8CCD0>{Escape(entry.ViewerName)}</color> começou a seguir" :
+            entry.GiftId.StartsWith("likes:", StringComparison.Ordinal) ?
+            $"<color=#A8CCD0>{Escape(entry.ViewerName)}</color> enviou {Escape(entry.GiftId.Substring(6))} curtidas" :
+            $"<color=#A8CCD0>{Escape(entry.ViewerName)}</color> enviou {entry.Gifts} {Escape(gift)}";
+        return heading + $"\n> Invocou {entry.Balls} <color={ballColor}>{ball}</color>";
     }
 
     private static string Escape(string value) => value.Replace("<", "&lt;").Replace(">", "&gt;")

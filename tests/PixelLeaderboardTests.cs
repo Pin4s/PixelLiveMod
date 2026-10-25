@@ -16,6 +16,16 @@ internal static class PixelLeaderboardTests
 
     private static void Main()
     {
+        Check(BridgeSourcePolicy.MayOwnPixels(null) && BridgeSourcePolicy.MayOwnPixels("gift") &&
+            BridgeSourcePolicy.MayOwnPixels("likes") && !BridgeSourcePolicy.MayOwnPixels("follow"),
+            "gift and likes bridge commands may own destroyed pixels; follow may not");
+        var likesBoard = new PixelLeaderboardService();
+        PixelParticipant likesOwner = likesBoard.Register("viewer-likes", "João");
+        Hit(likesBoard, likesOwner);
+        Hit(likesBoard, likesOwner);
+        Hit(likesBoard, null); // Follow and hotkey balls have no owner.
+        Check(likesOwner.Pixels == 2 && likesBoard.Top(5)[0].Id == "viewer-likes",
+            "owned like balls score actual destroyed pixels through the existing leaderboard");
         var board = new PixelLeaderboardService();
         PixelParticipant first = board.Register("viewer-1", "igual");
         PixelParticipant second = board.Register("viewer-2", "igual");

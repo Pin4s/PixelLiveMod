@@ -16,6 +16,13 @@ export interface AppConfig {
   eulerStreamApiKey?: string;
   bridgePort: number;
   gifts: GiftMapping[];
+  followRewardEnabled: boolean;
+  followRewardBallType: BallType;
+  followRewardBallQuantity: number;
+  likeRewardEnabled: boolean;
+  likeRewardThreshold: number;
+  likeRewardBallType: BallType;
+  likeRewardBallQuantity: number;
 }
 
 export const configPath = fileURLToPath(new URL('../config.json', import.meta.url));
@@ -71,7 +78,29 @@ export function validateConfig(raw: unknown, requireUsername = true, env: NodeJS
     return gift as unknown as GiftMapping;
   });
   for (const name of allowedNames) if (!seen.has(name)) throw new Error(`Missing gift: ${name}`);
-  return { tiktokUsername: username, tiktokRoomId: roomId || undefined, eulerStreamApiKey, bridgePort, gifts };
+  const bool = (key: string): boolean => {
+    const value = input[key] ?? true;
+    if (typeof value !== 'boolean') throw new Error(`${key} must be boolean`);
+    return value;
+  };
+  const ball = (key: string, fallback: BallType): BallType => {
+    const value = input[key] ?? fallback;
+    if (!['Orange', 'Yellow', 'Green', 'Pink', 'Inferno'].includes(String(value)))
+      throw new Error(`${key} must be a supported ball type`);
+    return value as BallType;
+  };
+  const integer = (key: string, fallback: number, max: number): number => {
+    const value = input[key] ?? fallback;
+    if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > max)
+      throw new Error(`${key} must be 1..${max}`);
+    return Number(value);
+  };
+  return { tiktokUsername: username, tiktokRoomId: roomId || undefined, eulerStreamApiKey, bridgePort, gifts,
+    followRewardEnabled: bool('followRewardEnabled'), followRewardBallType: ball('followRewardBallType', 'Pink'),
+    followRewardBallQuantity: integer('followRewardBallQuantity', 3, 20),
+    likeRewardEnabled: bool('likeRewardEnabled'), likeRewardThreshold: integer('likeRewardThreshold', 100, 1000000),
+    likeRewardBallType: ball('likeRewardBallType', 'Orange'),
+    likeRewardBallQuantity: integer('likeRewardBallQuantity', 1, 20) };
 }
 
 export function loadConfig(): AppConfig {

@@ -23,6 +23,7 @@ internal sealed class LocalSpawnBridge : IDisposable
     private readonly LiveGiftFeed? _feed;
     private readonly PixelLeaderboardService? _leaderboard;
     private readonly Dictionary<string, PendingGift> _giftCommands = new Dictionary<string, PendingGift>();
+    private readonly Queue<BridgeRequest> _rewardRetry = new Queue<BridgeRequest>();
     private readonly ConcurrentQueue<Incoming> _incoming = new ConcurrentQueue<Incoming>();
     private readonly HashSet<string> _seen = new HashSet<string>(StringComparer.Ordinal);
     private readonly Queue<string> _seenOrder = new Queue<string>();
@@ -46,6 +47,7 @@ internal sealed class LocalSpawnBridge : IDisposable
         _feed = feed;
         _leaderboard = leaderboard;
         _spawner.CommandCompleted += OnCommandCompleted;
+        _spawner.CommandCancelled += OnCommandCancelled;
         _spawner.BallCreated += OnBallCreated;
     }
 
@@ -152,6 +154,16 @@ internal sealed class LocalSpawnBridge : IDisposable
     // Called by PixelLiveMod.Update, always on Unity's main thread.
     internal void ProcessMainThread()
     {
+        if (!_transitioning && _rewardRetry.Count > 0)
+        {
+            BridgeRequest retry = _rewardRetry.Peek();
+            BridgeResponse outcome = Execute(retry);
+            if (outcome.Accepted)
+            {
+                _rewardRetry.Dequeue();
+                _log.LogInfo($"[Bridge] Reward retried after round transition: {retry.RequestId}");
+            }
+        }
         for (int i = 0; i < 10 && _incoming.TryDequeue(out Incoming? item); i++)
         {
             Interlocked.Decrement(ref _pendingCount);
@@ -203,6 +215,18 @@ internal sealed class LocalSpawnBridge : IDisposable
         }
         if (request.Quantity < 1 || request.Quantity > BallSpawnService.MaxBallsPerCommand)
             return new BridgeResponse(id, false, "quantity must be 1..20");
+        if (request.Source != null && request.Source != "gift" && request.Source != "follow" && request.Source != "likes")
+            return new BridgeResponse(id, false, "unsupported command source");
+        if (request.Source == "likes" && (request.Milestone <= 0 || request.BatchId == null ||
+            request.BatchId.Length > 80 || !IsSafeId(request.BatchId) ||
+            request.ViewerId == null || request.ViewerId.Length > 80 || !IsSafeId(request.ViewerId) ||
+            string.IsNullOrWhiteSpace(request.ViewerName) || request.ViewerName!.Length > 80))
+            return new BridgeResponse(id, false, "invalid likes metadata");
+        if (request.Source == "follow" && (request.BatchId == null || request.BatchId.Length > 80 ||
+            !IsSafeId(request.BatchId) || request.ViewerId == null || request.ViewerId.Length > 80 ||
+            !IsSafeId(request.ViewerId) || string.IsNullOrWhiteSpace(request.ViewerName) ||
+            request.ViewerName!.Length > 80))
+            return new BridgeResponse(id, false, "invalid follow metadata");
         if (request.Type != "Orange" && request.Type != "Yellow" &&
             request.Type != "Green" && request.Type != "Pink" && request.Type != "Inferno")
             return new BridgeResponse(id, false, "unsupported ball type");
@@ -224,7 +248,14 @@ internal sealed class LocalSpawnBridge : IDisposable
                     typeof(UpgradeManager.BallColor), request.Type);
                 accepted = _spawner.SpawnBalls(color, request.Quantity, position, id);
             }
-            if (accepted && HasValidGiftMetadata(request))
+            if (accepted && request.Source == "follow")
+                _giftCommands[id] = new PendingGift(request, null);
+            else if (accepted && request.Source == "likes" && BridgeSourcePolicy.MayOwnPixels(request.Source))
+            {
+                PixelParticipant? participant = _leaderboard?.Register(request.ViewerId!, request.ViewerName!);
+                _giftCommands[id] = new PendingGift(request, participant);
+            }
+            else if (accepted && BridgeSourcePolicy.MayOwnPixels(request.Source) && HasValidGiftMetadata(request))
             {
                 PixelParticipant? participant = _leaderboard?.Register(request.ViewerId!, request.ViewerName!);
                 _giftCommands[id] = new PendingGift(request, participant);
@@ -254,15 +285,38 @@ internal sealed class LocalSpawnBridge : IDisposable
         _giftCommands.Remove(requestId);
         BridgeRequest request = pending.Request;
         if (created > 0)
-            _feed?.Notify(request.BatchId!, request.ViewerId!, request.ViewerName!,
-                request.GiftId!, request.GiftName!, request.GiftUnits, request.Type!, created);
+        {
+            if (request.Source == "follow" || request.Source == "likes")
+                _feed?.NotifyReward(request.BatchId!, request.Source, request.ViewerId ?? "likes",
+                    request.ViewerName ?? "", request.Milestone, request.Type!, created);
+            else
+                _feed?.Notify(request.BatchId!, request.ViewerId!, request.ViewerName!,
+                    request.GiftId!, request.GiftName!, request.GiftUnits, request.Type!, created);
+        }
     }
 
     private void OnBallCreated(string requestId, GameObject ball)
     {
-        if (!_giftCommands.TryGetValue(requestId, out PendingGift? pending) ||
-            pending.Participant == null) return;
+        if (!_giftCommands.TryGetValue(requestId, out PendingGift? pending)) return;
+        pending.Created++;
+        if (pending.Participant == null) return;
         ball.AddComponent<PixelBallOwner>().Initialize(pending.Participant);
+    }
+
+    private void OnCommandCancelled(string requestId, int requested, int created)
+    {
+        if (!_giftCommands.TryGetValue(requestId, out PendingGift? pending)) return;
+        _giftCommands.Remove(requestId);
+        if (created > 0 && (pending.Request.Source == "follow" || pending.Request.Source == "likes"))
+            _feed?.NotifyReward(pending.Request.BatchId!, pending.Request.Source,
+                pending.Request.ViewerId ?? "likes", pending.Request.ViewerName ?? "",
+                pending.Request.Milestone, pending.Request.Type!, created);
+        if (pending.Request.Source != "follow" && pending.Request.Source != "likes") return;
+        int remaining = Math.Max(0, requested - created);
+        if (remaining == 0) return;
+        pending.Request.Quantity = remaining;
+        _rewardRetry.Enqueue(pending.Request);
+        _log.LogInfo($"[Bridge] Reward preserved for next round: {requestId}, remaining={remaining}");
     }
 
     // External commands have no pointer. Find the closest visible open cell to
@@ -344,8 +398,10 @@ internal sealed class LocalSpawnBridge : IDisposable
         _stopping = true;
         _listener?.Stop();
         _spawner.CommandCompleted -= OnCommandCompleted;
+        _spawner.CommandCancelled -= OnCommandCancelled;
         _spawner.BallCreated -= OnBallCreated;
         _giftCommands.Clear();
+        _rewardRetry.Clear();
     }
 
     private sealed class Incoming
@@ -363,6 +419,7 @@ internal sealed class LocalSpawnBridge : IDisposable
     {
         internal readonly BridgeRequest Request;
         internal readonly PixelParticipant? Participant;
+        internal int Created;
         internal PendingGift(BridgeRequest request, PixelParticipant? participant)
         { Request = request; Participant = participant; }
     }
@@ -374,6 +431,8 @@ internal sealed class LocalSpawnBridge : IDisposable
         [DataMember(Name = "action", EmitDefaultValue = false)] public string? Action { get; set; }
         [DataMember(Name = "type")] public string? Type { get; set; }
         [DataMember(Name = "quantity")] public int Quantity { get; set; }
+        [DataMember(Name = "source", EmitDefaultValue = false)] public string? Source { get; set; }
+        [DataMember(Name = "milestone", EmitDefaultValue = false)] public int Milestone { get; set; }
         [DataMember(Name = "batchId", EmitDefaultValue = false)] public string? BatchId { get; set; }
         [DataMember(Name = "viewerId", EmitDefaultValue = false)] public string? ViewerId { get; set; }
         [DataMember(Name = "viewerName", EmitDefaultValue = false)] public string? ViewerName { get; set; }

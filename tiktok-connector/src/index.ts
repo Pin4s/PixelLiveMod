@@ -1,9 +1,10 @@
 import { ControlEvent, TikTokLiveConnection, WebcastEvent } from 'tiktok-live-connector';
-import { BridgeClient, splitCommands } from './bridge.js';
+import { BridgeClient, splitCommands, type SpawnCommand } from './bridge.js';
 import { loadConfig } from './config.js';
 import { formatTikTokError, retryDelayForTikTokError } from './errors.js';
 import { GiftResolver, parseCatalog, parseGiftEvent } from './gifts.js';
 import { SequenceCounter } from './sequence.js';
+import { EngagementCounter } from './engagement.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -14,6 +15,16 @@ async function main(): Promise<void> {
   const bridge = new BridgeClient(config.bridgePort, log);
   bridge.start();
   const counter = new SequenceCounter(log);
+  const engagement = new EngagementCounter(config, log);
+  let rewardDispatch = Promise.resolve();
+  const dispatchReward = (command: SpawnCommand): void => {
+    rewardDispatch = rewardDispatch.then(async () => {
+      const label = command.source === 'follow' ? '[Follow]' : '[Likes]';
+      log(`${label} Reward requested: ${command.type} x${command.quantity}, requestId=${command.requestId}`);
+      const accepted = await bridge.submit(command);
+      log(`${label} Command ${accepted ? 'queued' : 'not confirmed'}: requestId=${command.requestId}${command.milestone ? `, milestone=${command.milestone}` : ''}`);
+    }).catch(error => log(`[Engagement] Reward dispatch error: ${String(error)}`));
+  };
   let stopped = false;
   const retryAbort = new AbortController();
   let currentConnection: TikTokLiveConnection | null = null;
@@ -88,11 +99,22 @@ async function main(): Promise<void> {
         }
       })().catch(error => log(`[TikTok] Gift dispatch error: ${String(error)}`));
     });
+    events.on(WebcastEvent.FOLLOW, (raw: unknown) => {
+      const command = engagement.follow(raw);
+      if (!command) return;
+      dispatchReward(command);
+    });
+    events.on(WebcastEvent.LIKE, (raw: unknown) => {
+      for (const command of engagement.like(raw)) {
+        dispatchReward(command);
+      }
+    });
 
     try {
       log(`[TikTok] Connecting to @${config.tiktokUsername}${config.tiktokRoomId ? `, room=${config.tiktokRoomId}` : ''}`);
       const state = await connection.connect(config.tiktokRoomId);
       connecting = false;
+      engagement.connect(String(state.roomId));
       log(`[TikTok] Connected to @${config.tiktokUsername}, room=${state.roomId || '<unknown>'}`);
       try {
         const catalog = parseCatalog(await connection.fetchAvailableGifts());
